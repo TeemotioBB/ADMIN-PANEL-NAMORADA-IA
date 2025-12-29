@@ -6,10 +6,11 @@ Monitor chats, VIPs and revenue
 
 import os
 import redis
-from flask import Flask, request, redirect, url_for
+from flask import Flask, request, redirect
 
+# ================= CONFIG =================
 REDIS_URL = "redis://default:DcddfJOHLXZdFPjEhRjHeodNgdtrsevl@shuttle.proxy.rlwy.net:12241"
-ADMIN_PASSWORD = "admin123"  # MUDE ISSO
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # troque depois
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -21,11 +22,12 @@ def login():
     if request.method == "POST":
         if request.form.get("password") == ADMIN_PASSWORD:
             return redirect("/dashboard")
+
     return """
         <h2>Sophia Admin Login</h2>
         <form method="post">
-            <input type="password" name="password" placeholder="Password"/>
-            <button>Login</button>
+            <input type="password" name="password" placeholder="Password" />
+            <button type="submit">Login</button>
         </form>
     """
 
@@ -38,7 +40,7 @@ def dashboard():
         users.add(key.split(":")[1])
 
     html = "<h1>Sophia Dashboard</h1><ul>"
-    for uid in users:
+    for uid in sorted(users):
         html += f"<li><a href='/chat/{uid}'>User {uid}</a></li>"
     html += "</ul>"
 
@@ -61,5 +63,7 @@ def chat(uid):
 
     return html
 
+# ================= MAIN =================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)

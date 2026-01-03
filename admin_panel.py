@@ -527,12 +527,46 @@ def dashboard():
     if not check_redis():
         return "<h1>❌ Erro: Redis não conectado</h1>", 500
     
-    users = get_all_users()
+    # Filtros da URL
+    filter_type = request.args.get('filter', 'recent')  # recent, vip, online, all
+    page = int(request.args.get('page', 1))
+    per_page = 20
+    
+    all_users = get_all_users()
     global_stats = get_global_stats()
+    
+    # Aplicar filtros
+    filtered_users = []
+    for uid in all_users:
+        stats = get_user_stats(uid)
+        
+        if filter_type == 'vip' and not stats['is_vip']:
+            continue
+        elif filter_type == 'online' and stats['status'] != 'online':
+            continue
+        elif filter_type == 'recent':
+            # Apenas usuários ativos nas últimas 24h
+            if stats['last_activity']:
+                time_diff = datetime.now() - stats['last_activity']
+                if time_diff > timedelta(hours=24):
+                    continue
+            else:
+                continue
+        
+        filtered_users.append((uid, stats))
+    
+    # Ordenar por última atividade (mais recente primeiro)
+    filtered_users.sort(key=lambda x: x[1]['last_activity'] or datetime.min, reverse=True)
+    
+    # Paginação
+    total_pages = (len(filtered_users) + per_page - 1) // per_page
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_users = filtered_users[start_idx:end_idx]
     
     # Gerar cards dos usuários
     users_html = ""
-    for uid in users[:50]:  # Primeiros 50 usuários
+    for uid, stats in page_users:
         stats = get_user_stats(uid)
         status_class = f"status-{stats['status']}"
         status_text = {
@@ -575,10 +609,68 @@ def dashboard():
         users_html = """
         <div class="empty-state">
             <i class="fas fa-users"></i>
-            <h3>Nenhuma conversa registrada</h3>
-            <p>Aguardando usuários iniciarem conversas com a IA</p>
+            <h3>Nenhuma conversa encontrada</h3>
+            <p>Tente mudar os filtros acima</p>
         </div>
         """
+    
+    # Botões de filtro
+    filters_html = f"""
+    <div style="background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+            <a href="/dashboard?filter=recent" class="btn {'btn-secondary' if filter_type != 'recent' else ''}" style="flex: 1; min-width: 150px; text-align: center;">
+                <i class="fas fa-clock"></i> Recentes (24h)
+            </a>
+            <a href="/dashboard?filter=online" class="btn {'btn-secondary' if filter_type != 'online' else ''}" style="flex: 1; min-width: 150px; text-align: center;">
+                <i class="fas fa-circle"></i> Online Agora
+            </a>
+            <a href="/dashboard?filter=vip" class="btn {'btn-secondary' if filter_type != 'vip' else ''}" style="flex: 1; min-width: 150px; text-align: center;">
+                <i class="fas fa-crown"></i> Apenas VIPs
+            </a>
+            <a href="/dashboard?filter=all" class="btn {'btn-secondary' if filter_type != 'all' else ''}" style="flex: 1; min-width: 150px; text-align: center;">
+                <i class="fas fa-list"></i> Todos ({len(all_users)})
+            </a>
+        </div>
+        <input type="text" class="search-box" placeholder="🔍 Buscar usuário por ID..." 
+               onkeyup="filterUsers(this.value)" style="margin-bottom: 0;">
+    </div>
+    """
+    
+    # Paginação
+    pagination_html = ""
+    if total_pages > 1:
+        pagination_html = '<div style="display: flex; justify-content: center; gap: 10px; margin-top: 20px; flex-wrap: wrap;">'
+        
+        # Botão anterior
+        if page > 1:
+            pagination_html += f'<a href="/dashboard?filter={filter_type}&page={page-1}" class="btn btn-secondary"><i class="fas fa-chevron-left"></i> Anterior</a>'
+        
+        # Números das páginas (mostra até 5 páginas)
+        start_page = max(1, page - 2)
+        end_page = min(total_pages, page + 2)
+        
+        if start_page > 1:
+            pagination_html += f'<a href="/dashboard?filter={filter_type}&page=1" class="btn btn-secondary">1</a>'
+            if start_page > 2:
+                pagination_html += '<span style="padding: 10px;">...</span>'
+        
+        for p in range(start_page, end_page + 1):
+            if p == page:
+                pagination_html += f'<button class="btn" disabled style="opacity: 1;">{p}</button>'
+            else:
+                pagination_html += f'<a href="/dashboard?filter={filter_type}&page={p}" class="btn btn-secondary">{p}</a>'
+        
+        if end_page < total_pages:
+            if end_page < total_pages - 1:
+                pagination_html += '<span style="padding: 10px;">...</span>'
+            pagination_html += f'<a href="/dashboard?filter={filter_type}&page={total_pages}" class="btn btn-secondary">{total_pages}</a>'
+        
+        # Botão próximo
+        if page < total_pages:
+            pagination_html += f'<a href="/dashboard?filter={filter_type}&page={page+1}" class="btn btn-secondary">Próximo <i class="fas fa-chevron-right"></i></a>'
+        
+        pagination_html += '</div>'
+        pagination_html += f'<p style="text-align: center; margin-top: 10px; color: white; opacity: 0.8;">Página {page} de {total_pages} • Mostrando {len(page_users)} de {len(filtered_users)} usuários</p>'
     
     html_content = f"""
     <!DOCTYPE html>
@@ -598,9 +690,14 @@ def dashboard():
                         <h1><i class="fas fa-chart-line"></i> Dashboard Sophia AI</h1>
                         <p style="margin-top: 5px; opacity: 0.8;">Monitoramento em Tempo Real • {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
                     </div>
-                    <a href="/logout" class="btn btn-secondary">
-                        <i class="fas fa-sign-out-alt"></i> Sair
-                    </a>
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="showCleanupModal()" class="btn" style="background: #ef4444;">
+                            <i class="fas fa-trash"></i> Limpar Antigos
+                        </button>
+                        <a href="/logout" class="btn btn-secondary">
+                            <i class="fas fa-sign-out-alt"></i> Sair
+                        </a>
+                    </div>
                 </div>
             </div>
             
@@ -623,14 +720,13 @@ def dashboard():
                 </div>
             </div>
             
-            <div style="background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                <input type="text" class="search-box" placeholder="🔍 Buscar usuário por ID..." 
-                       onkeyup="filterUsers(this.value)">
-            </div>
+            {filters_html}
             
             <div class="user-list" id="userList">
                 {users_html}
             </div>
+            
+            {pagination_html}
             
             <div style="text-align: center; margin-top: 30px;">
                 <button class="btn" onclick="location.reload()">
@@ -652,6 +748,25 @@ def dashboard():
         
         // Auto-refresh a cada 30 segundos
         setTimeout(() => {{ location.reload(); }}, 30000);
+        
+        function showCleanupModal() {{
+            const days = prompt("Remover conversas com mais de quantos dias sem atividade?\\n(Padrão: 30 dias)", "30");
+            if (days && !isNaN(days) && days > 0) {{
+                if (confirm(`Tem certeza que deseja remover conversas com mais de ${{days}} dias sem atividade?\\n\\nEsta ação não pode ser desfeita!`)) {{
+                    fetch('/cleanup', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+                        body: `days=${{days}}`
+                    }})
+                    .then(r => r.json())
+                    .then(data => {{
+                        alert(data.message);
+                        location.reload();
+                    }})
+                    .catch(err => alert('Erro ao limpar conversas'));
+                }}
+            }}
+        }}
         </script>
     </body>
     </html>
@@ -778,6 +893,33 @@ def chat_view(uid):
 def logout():
     session.clear()
     return redirect("/login")
+
+@app.route("/cleanup", methods=["POST"])
+def cleanup():
+    """Remove conversas antigas (mais de 30 dias sem atividade)"""
+    if not session.get("authenticated"):
+        return redirect("/login")
+    
+    days = int(request.form.get('days', 30))
+    cutoff_date = datetime.now() - timedelta(days=days)
+    
+    removed = 0
+    all_users = get_all_users()
+    
+    for uid in all_users:
+        stats = get_user_stats(uid)
+        if stats['last_activity'] and stats['last_activity'] < cutoff_date:
+            try:
+                redis_client.delete(f"chatlog:{uid}")
+                removed += 1
+            except Exception as e:
+                logger.error(f"Erro ao remover {uid}: {e}")
+    
+    return jsonify({
+        "success": True,
+        "removed": removed,
+        "message": f"{removed} conversas removidas com sucesso!"
+    })
 
 @app.route("/health")
 def health():

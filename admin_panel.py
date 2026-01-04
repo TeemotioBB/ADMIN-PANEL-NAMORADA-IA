@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-🎯 Sophia Admin Panel v3 - Chat em Tempo Real
-NOVIDADES v3:
-- Chat integrado: envie mensagens diretamente pelo painel
-- Marcação [ADMIN] para diferenciar de mensagens automáticas
-- Campo de input com envio em tempo real
-- Indicador de digitação
+🎯 Sophia Admin Panel v4 - Mobile-First UX
+NOVIDADES v4:
+- Design mobile-first com menu hamburguer
+- Dark mode toggle
+- FAB (Floating Action Button)
+- Bottom sheet para ações
+- Busca de usuários
+- Pull-to-refresh visual
+- Animações suaves
+- Touch-friendly (botões maiores)
+- Notificações melhoradas
 """
 
 import os
@@ -27,7 +32,6 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 SECRET_KEY = os.environ.get("SECRET_KEY", "sophia-secret-" + str(int(time.time())))
 PORT = int(os.environ.get("PORT", 8081))
 
-# PARÂMETROS DE STATUS
 ONLINE_THRESHOLD = 20
 IDLE_THRESHOLD = 40
 OFFLINE_THRESHOLD = 60
@@ -36,14 +40,13 @@ RECENT_THRESHOLD = 24
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializar Redis
 redis_client = None
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=5, socket_timeout=5)
     redis_client.ping()
-    logger.info("✅ Redis conectado com sucesso")
+    logger.info("✅ Redis conectado")
 except Exception as e:
-    logger.error(f"❌ Erro ao conectar ao Redis: {e}")
+    logger.error(f"❌ Redis erro: {e}")
     redis_client = None
 
 app = Flask(__name__)
@@ -52,7 +55,6 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 
 # ================= TELEGRAM API =================
 def send_telegram_message(chat_id, text):
-    """Envia mensagem via API do Telegram (usando urllib nativo)"""
     if not TELEGRAM_TOKEN:
         return False, "Token não configurado"
     
@@ -65,19 +67,11 @@ def send_telegram_message(chat_id, text):
             "parse_mode": "Markdown"
         }).encode('utf-8')
         
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
+        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
         
         with urllib.request.urlopen(req, timeout=10) as response:
             result = json.loads(response.read().decode('utf-8'))
-            if result.get("ok"):
-                return True, "Enviado"
-            else:
-                return False, result.get("description", "Erro desconhecido")
+            return (True, "Enviado") if result.get("ok") else (False, result.get("description", "Erro"))
                 
     except urllib.error.HTTPError as e:
         try:
@@ -89,83 +83,64 @@ def send_telegram_message(chat_id, text):
         return False, str(e)
 
 def send_telegram_photo(chat_id, photo_data, caption=""):
-    """Envia foto via API do Telegram usando multipart/form-data"""
     if not TELEGRAM_TOKEN:
         return False, "Token não configurado"
     
     import uuid
     boundary = str(uuid.uuid4())
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     
     try:
-        # Construir multipart/form-data manualmente
         body = b''
-        
-        # Campo chat_id
         body += f'--{boundary}\r\n'.encode()
         body += b'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
         body += f'{chat_id}\r\n'.encode()
         
-        # Campo caption (se houver)
         if caption:
             body += f'--{boundary}\r\n'.encode()
             body += b'Content-Disposition: form-data; name="caption"\r\n\r\n'
             body += f'{caption}\r\n'.encode()
         
-        # Campo photo (arquivo)
         body += f'--{boundary}\r\n'.encode()
         body += b'Content-Disposition: form-data; name="photo"; filename="photo.jpg"\r\n'
         body += b'Content-Type: image/jpeg\r\n\r\n'
         body += photo_data
         body += b'\r\n'
-        
-        # Finalizar
         body += f'--{boundary}--\r\n'.encode()
         
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                'Content-Type': f'multipart/form-data; boundary={boundary}',
-                'Content-Length': len(body)
-            },
-            method='POST'
-        )
+        req = urllib.request.Request(url, data=body, headers={
+            'Content-Type': f'multipart/form-data; boundary={boundary}',
+            'Content-Length': len(body)
+        }, method='POST')
         
         with urllib.request.urlopen(req, timeout=30) as response:
             result = json.loads(response.read().decode('utf-8'))
-            if result.get("ok"):
-                return True, "Foto enviada"
-            else:
-                return False, result.get("description", "Erro desconhecido")
+            return (True, "Foto enviada") if result.get("ok") else (False, result.get("description", "Erro"))
                 
-    except urllib.error.HTTPError as e:
-        try:
-            error_body = json.loads(e.read().decode('utf-8'))
-            return False, error_body.get("description", str(e))
-        except:
-            return False, str(e)
     except Exception as e:
         return False, str(e)
 
+def save_admin_message(uid, text):
+    try:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        redis_client.rpush(f"chatlog:{uid}", f"[{timestamp}] ADMIN: {text[:100]}")
+        redis_client.ltrim(f"chatlog:{uid}", -200, -1)
+        return True
+    except:
+        return False
+
 # ================= AÇÕES ADMIN =================
 def activate_vip(uid, days=15):
-    """Ativa VIP para usuário"""
     try:
         vip_until = datetime.now() + timedelta(days=days)
         redis_client.set(f"vip:{uid}", vip_until.isoformat())
-        # Limpa flags relacionadas
-        redis_client.delete(f"pix_pending:{uid}")
-        redis_client.delete(f"pix_clicked:{uid}")
-        redis_client.delete(f"pix_interest:{uid}")
-        redis_client.delete(f"flash_discount:{uid}")
-        return True, f"VIP ativo até {vip_until.strftime('%d/%m/%Y')}"
+        for key in ["pix_pending", "pix_clicked", "pix_interest", "flash_discount"]:
+            redis_client.delete(f"{key}:{uid}")
+        return True, f"VIP até {vip_until.strftime('%d/%m/%Y')}"
     except Exception as e:
         return False, str(e)
 
 def reset_daily_limit(uid):
-    """Reseta limite diário do usuário"""
     try:
         from datetime import date
         redis_client.delete(f"count:{uid}:{date.today()}")
@@ -174,17 +149,15 @@ def reset_daily_limit(uid):
         return False, str(e)
 
 def give_bonus_messages(uid, amount=5):
-    """Dá mensagens bônus ao usuário"""
     try:
         current = int(redis_client.get(f"bonus:{uid}") or 0)
         redis_client.set(f"bonus:{uid}", current + amount)
         redis_client.expire(f"bonus:{uid}", 86400 * 7)
-        return True, f"+{amount} msgs bônus (total: {current + amount})"
+        return True, f"+{amount} msgs (total: {current + amount})"
     except Exception as e:
         return False, str(e)
 
 def clear_user_memory(uid):
-    """Limpa memória de conversa do usuário"""
     try:
         redis_client.delete(f"memory:{uid}")
         return True, "Memória limpa"
@@ -192,7 +165,6 @@ def clear_user_memory(uid):
         return False, str(e)
 
 def unpause_user(uid):
-    """Despausa gatilhos para o usuário"""
     try:
         redis_client.delete(f"paused:{uid}")
         redis_client.delete(f"ignored:{uid}")
@@ -201,7 +173,6 @@ def unpause_user(uid):
         return False, str(e)
 
 def blacklist_user(uid):
-    """Adiciona usuário à blacklist"""
     try:
         redis_client.sadd("blacklist", str(uid))
         return True, "Usuário bloqueado"
@@ -209,532 +180,892 @@ def blacklist_user(uid):
         return False, str(e)
 
 def unblacklist_user(uid):
-    """Remove usuário da blacklist"""
     try:
         redis_client.srem("blacklist", str(uid))
         return True, "Usuário desbloqueado"
     except Exception as e:
         return False, str(e)
 
-def save_admin_message(uid, text):
-    """Salva mensagem do admin no log (formato compatível com o bot)"""
-    try:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        # Marca como ADMIN para diferenciar das mensagens automáticas da Sophia
-        redis_client.rpush(f"chatlog:{uid}", f"[{timestamp}] ADMIN: {text[:100]}")
-        redis_client.ltrim(f"chatlog:{uid}", -200, -1)
-        return True
-    except Exception as e:
-        logger.error(f"Erro ao salvar mensagem: {e}")
-        return False
-
-# ================= STYLES =================
+# ================= STYLES v4 - MOBILE FIRST =================
 STYLES = """
 <style>
+:root {
+    --primary: #667eea;
+    --primary-dark: #5a67d8;
+    --secondary: #764ba2;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --dark-bg: #1a1a2e;
+    --dark-card: #16213e;
+    --dark-text: #e4e4e7;
+    --light-bg: #f0f2f5;
+    --light-card: #ffffff;
+    --light-text: #333333;
+    --radius: 16px;
+    --shadow: 0 4px 20px rgba(0,0,0,0.1);
+    --shadow-lg: 0 10px 40px rgba(0,0,0,0.15);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { 
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: #333; 
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--light-bg);
+    color: var(--light-text);
     min-height: 100vh;
+    transition: all 0.3s ease;
+    -webkit-tap-highlight-color: transparent;
 }
-.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-.header { 
-    background: rgba(255,255,255,0.95); 
-    color: #667eea; 
-    padding: 25px; 
-    border-radius: 15px; 
-    margin-bottom: 20px; 
-    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+
+body.dark {
+    --light-bg: var(--dark-bg);
+    --light-card: var(--dark-card);
+    --light-text: var(--dark-text);
+    background: var(--dark-bg);
+    color: var(--dark-text);
 }
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 15px;
-    margin-bottom: 20px;
-}
-.stat-card {
-    background: white;
-    padding: 20px;
-    border-radius: 10px;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    text-align: center;
-}
-.stat-number { font-size: 32px; font-weight: bold; color: #667eea; }
-.stat-label { color: #666; font-size: 14px; margin-top: 5px; }
-.user-list { 
-    display: grid; 
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
-    gap: 15px;
-    margin-bottom: 20px;
-}
-.user-card { 
-    background: white;
-    padding: 20px; 
-    border-radius: 12px; 
-    cursor: pointer; 
-    transition: all 0.3s; 
-    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    border-left: 4px solid #667eea;
-    position: relative;
-}
-.user-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-.user-card.online { border-left-color: #10b981; }
-.user-card.idle { border-left-color: #f59e0b; }
-.user-card.offline { border-left-color: #ef4444; }
-.user-id { font-weight: bold; color: #667eea; font-size: 16px; margin-bottom: 10px; word-break: break-all; }
-.user-stats {
-    display: flex;
-    justify-content: space-between;
-    font-size: 13px;
-    color: #666;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid #eee;
-}
-.last-message {
-    font-size: 12px;
-    color: #999;
-    margin-top: 8px;
-    font-style: italic;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-.status-online { background: #10b981; color: white; }
-.status-offline { background: #ef4444; color: white; }
-.status-idle { background: #f59e0b; color: white; }
-.badge-vip { background: gold; color: #333; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; margin-left: 5px; }
-.badge-locked { background: #ef4444; color: white; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; margin-left: 5px; }
-.chat-view {
-    background: white;
-    border-radius: 15px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-    height: calc(100vh - 280px);
-    display: flex;
-    flex-direction: column;
-}
-.chat-header {
-    padding: 20px;
-    border-bottom: 2px solid #f0f0f0;
+
+/* ===== HEADER FIXO ===== */
+.header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    color: white;
+    padding: 15px 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    box-shadow: var(--shadow-lg);
 }
-.chat-messages { 
-    flex: 1; 
-    padding: 20px; 
-    overflow-y: auto; 
-    background: #f8f9fa;
-}
-.message { 
-    margin-bottom: 12px; 
-    padding: 12px 16px; 
-    border-radius: 18px; 
-    max-width: 80%;
-    word-wrap: break-word;
-    animation: slideIn 0.3s ease-out;
-}
-@keyframes slideIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.message-user { 
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white; 
-    margin-left: auto; 
-    border-bottom-right-radius: 4px; 
-}
-.message-sophia { 
-    background: white; 
-    color: #333; 
-    border: 1px solid #e0e0e0;
-    border-bottom-left-radius: 4px; 
-}
-.message-admin {
-    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-    color: white;
-    border-bottom-left-radius: 4px;
-    position: relative;
-}
-.message-admin::before {
-    content: "👑 ADMIN";
-    position: absolute;
-    top: -18px;
-    left: 0;
-    font-size: 10px;
-    color: #d97706;
-    font-weight: bold;
-}
-.message-action {
-    background: #e3f2fd;
-    color: #1565c0;
-    border: 1px solid #90caf9;
-    margin: 0 auto;
-    text-align: center;
-    font-size: 12px;
-    max-width: 90%;
-    border-radius: 8px;
-}
-.message-info {
-    background: #f3e5f5;
-    color: #7b1fa2;
-    border: 1px solid #ce93d8;
-    margin: 0 auto;
-    text-align: center;
-    font-size: 12px;
-    max-width: 90%;
-    border-radius: 8px;
-}
-.message-error {
-    background: #ffebee;
-    color: #c62828;
-    border: 1px solid #ef9a9a;
-    margin: 0 auto;
-    text-align: center;
-    font-size: 12px;
-    max-width: 90%;
-    border-radius: 8px;
-}
-.message-blocked {
-    background: #fff3e0;
-    color: #e65100;
-    border: 1px solid #ffcc80;
-    margin: 0 auto;
-    text-align: center;
-    font-size: 12px;
-    max-width: 90%;
-    border-radius: 8px;
-}
-.message-system {
-    background: #fff3cd;
-    color: #856404;
-    border: 1px solid #ffc107;
-    margin: 0 auto;
-    text-align: center;
-    font-size: 12px;
-    max-width: 90%;
-    border-radius: 8px;
-}
-.message-sender { font-weight: bold; margin-bottom: 5px; font-size: 12px; opacity: 0.9; }
-.message-time { font-size: 10px; opacity: 0.7; margin-top: 5px; }
-.btn { 
-    display: inline-block; 
-    padding: 12px 24px; 
-    background: #667eea; 
-    color: white; 
-    text-decoration: none; 
-    border-radius: 8px; 
-    border: none; 
-    cursor: pointer; 
-    font-weight: 500;
-    transition: all 0.3s;
-}
-.btn:hover { background: #5a67d8; transform: translateY(-2px); }
-.btn-secondary { background: #6c757d; }
-.btn-secondary:hover { background: #5a6268; }
-.btn-warning { background: #f59e0b; }
-.btn-warning:hover { background: #d97706; }
-.login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
-.login-card {
-    background: white;
-    padding: 40px;
-    border-radius: 15px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    width: 100%;
-    max-width: 400px;
-}
-.form-group { margin-bottom: 20px; }
-.form-group label { display: block; margin-bottom: 8px; font-weight: 600; }
-.form-group input, .form-group textarea {
-    width: 100%;
-    padding: 12px;
-    border: 2px solid #e0e0e0;
-    border-radius: 8px;
-    font-size: 14px;
-}
-.form-group input:focus, .form-group textarea:focus { outline: none; border-color: #667eea; }
-.empty-state { text-align: center; padding: 60px 20px; color: #666; }
-.legend {
-    background: white;
-    padding: 15px;
-    border-radius: 10px;
-    margin-bottom: 15px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 15px;
-    justify-content: center;
-    font-size: 12px;
-}
-.legend-item { display: flex; align-items: center; gap: 5px; }
-.legend-color { width: 16px; height: 16px; border-radius: 4px; }
-.pagination { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
-.pagination a {
-    padding: 8px 16px;
-    background: white;
-    border-radius: 8px;
-    text-decoration: none;
-    color: #667eea;
-    transition: all 0.3s;
-}
-.pagination a:hover, .pagination a.active { background: #667eea; color: white; }
 
-/* ===== CHAT INPUT ===== */
-.chat-input-container {
-    padding: 15px 20px;
-    border-top: 2px solid #f0f0f0;
-    background: white;
-    border-radius: 0 0 15px 15px;
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 15px;
 }
-.chat-input-form {
+
+.header h1 {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.header-actions {
     display: flex;
     gap: 10px;
     align-items: center;
 }
-.chat-input {
-    flex: 1;
-    padding: 12px 16px;
-    border: 2px solid #e0e0e0;
-    border-radius: 25px;
-    font-size: 14px;
-    transition: all 0.3s;
-}
-.chat-input:focus {
-    outline: none;
-    border-color: #f59e0b;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
-}
-.chat-send-btn {
-    padding: 12px 24px;
-    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-    color: white;
-    border: none;
-    border-radius: 25px;
-    font-weight: bold;
+
+/* ===== MENU HAMBURGUER ===== */
+.hamburger {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
     cursor: pointer;
-    transition: all 0.3s;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.chat-send-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 5px 15px rgba(245, 158, 11, 0.4);
-}
-.chat-send-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
-}
-.sending-indicator {
-    display: none;
-    color: #f59e0b;
-    font-size: 12px;
-    margin-top: 8px;
-}
-.sending-indicator.active {
-    display: block;
-    animation: pulse 1s infinite;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
-.token-warning {
-    background: #fff3cd;
-    color: #856404;
-    padding: 10px 15px;
-    border-radius: 8px;
-    margin-bottom: 15px;
-    font-size: 13px;
-}
-.success-toast {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: #10b981;
-    color: white;
-    padding: 15px 25px;
-    border-radius: 10px;
-    box-shadow: 0 5px 20px rgba(0,0,0,0.2);
-    display: none;
-    z-index: 1000;
-    animation: slideUp 0.3s ease-out;
-}
-.error-toast {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: #ef4444;
-    color: white;
-    padding: 15px 25px;
-    border-radius: 10px;
-    box-shadow: 0 5px 20px rgba(0,0,0,0.2);
-    display: none;
-    z-index: 1000;
-}
-@keyframes slideUp {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+    padding: 10px;
+    margin: -10px;
 }
 
-/* ===== ATALHOS E AÇÕES ===== */
-.shortcuts-panel {
+.hamburger span {
+    width: 24px;
+    height: 3px;
     background: white;
-    border-radius: 10px;
+    border-radius: 3px;
+    transition: all 0.3s;
+}
+
+.hamburger.active span:nth-child(1) {
+    transform: rotate(45deg) translate(5px, 5px);
+}
+
+.hamburger.active span:nth-child(2) {
+    opacity: 0;
+}
+
+.hamburger.active span:nth-child(3) {
+    transform: rotate(-45deg) translate(7px, -7px);
+}
+
+/* ===== DARK MODE TOGGLE ===== */
+.theme-toggle {
+    width: 50px;
+    height: 28px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 14px;
+    position: relative;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.theme-toggle::after {
+    content: '☀️';
+    position: absolute;
+    left: 3px;
+    top: 2px;
+    width: 24px;
+    height: 24px;
+    background: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: all 0.3s;
+}
+
+body.dark .theme-toggle::after {
+    content: '🌙';
+    left: 23px;
+}
+
+/* ===== CONTAINER ===== */
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
     padding: 15px;
+}
+
+/* ===== SEARCH BAR ===== */
+.search-container {
+    position: relative;
     margin-bottom: 15px;
 }
-.shortcuts-title {
-    font-weight: bold;
-    color: #667eea;
-    margin-bottom: 10px;
-    font-size: 14px;
-}
-.shortcuts-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-.shortcut-btn {
-    padding: 8px 14px;
+
+.search-input {
+    width: 100%;
+    padding: 14px 20px 14px 50px;
     border: none;
-    border-radius: 20px;
+    border-radius: var(--radius);
+    background: var(--light-card);
+    font-size: 16px;
+    box-shadow: var(--shadow);
+    transition: all 0.3s;
+}
+
+.search-input:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
+}
+
+.search-icon {
+    position: absolute;
+    left: 18px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #999;
+    font-size: 18px;
+}
+
+/* ===== STATS CARDS ===== */
+.stats-scroll {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 5px 0 15px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+
+.stats-scroll::-webkit-scrollbar { display: none; }
+
+.stat-card {
+    flex: 0 0 auto;
+    min-width: 130px;
+    background: var(--light-card);
+    padding: 15px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.stat-label {
     font-size: 12px;
+    color: #888;
+    margin-top: 5px;
+}
+
+/* ===== FILTER CHIPS ===== */
+.filter-chips {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 10px 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+
+.filter-chips::-webkit-scrollbar { display: none; }
+
+.chip {
+    flex: 0 0 auto;
+    padding: 10px 18px;
+    background: var(--light-card);
+    border-radius: 25px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-.shortcut-btn:hover {
-    transform: scale(1.05);
-}
-.shortcut-msg {
-    background: #e3f2fd;
-    color: #1565c0;
-}
-.shortcut-msg:hover {
-    background: #bbdefb;
-}
-.shortcut-action {
-    background: #f3e5f5;
-    color: #7b1fa2;
-}
-.shortcut-action:hover {
-    background: #e1bee7;
-}
-.shortcut-vip {
-    background: linear-gradient(135deg, #ffd700, #ffb300);
-    color: #333;
-}
-.shortcut-vip:hover {
-    box-shadow: 0 3px 10px rgba(255, 215, 0, 0.4);
-}
-.shortcut-danger {
-    background: #ffebee;
-    color: #c62828;
-}
-.shortcut-danger:hover {
-    background: #ffcdd2;
-}
-.shortcut-success {
-    background: #e8f5e9;
-    color: #2e7d32;
-}
-.shortcut-success:hover {
-    background: #c8e6c9;
+    box-shadow: var(--shadow);
+    border: 2px solid transparent;
+    white-space: nowrap;
 }
 
-/* ===== MENSAGENS PRÉ-DEFINIDAS ===== */
-.preset-messages {
-    background: #f8f9fa;
-    border-radius: 8px;
-    padding: 10px;
-    margin-top: 10px;
-    display: none;
+.chip:active {
+    transform: scale(0.95);
 }
-.preset-messages.active {
-    display: block;
-}
-.preset-msg {
-    padding: 8px 12px;
-    background: white;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    margin-bottom: 5px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: all 0.2s;
-}
-.preset-msg:hover {
-    background: #667eea;
+
+.chip.active {
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
     color: white;
-    border-color: #667eea;
 }
 
-/* ===== UPLOAD DE FOTO ===== */
-.photo-upload-area {
-    border: 2px dashed #ccc;
-    border-radius: 10px;
-    padding: 20px;
-    text-align: center;
-    margin-top: 10px;
-    display: none;
+/* ===== USER CARDS ===== */
+.user-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.user-card {
+    background: var(--light-card);
+    border-radius: var(--radius);
+    padding: 18px;
+    box-shadow: var(--shadow);
+    cursor: pointer;
     transition: all 0.3s;
-}
-.photo-upload-area.active {
-    display: block;
-}
-.photo-upload-area.dragover {
-    border-color: #667eea;
-    background: #f0f4ff;
-}
-.photo-preview {
-    max-width: 200px;
-    max-height: 150px;
-    border-radius: 8px;
-    margin: 10px auto;
-    display: none;
-}
-.photo-preview.active {
-    display: block;
-}
-.upload-btn {
-    background: #667eea;
-    color: white;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    margin-top: 10px;
-}
-.upload-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+    border-left: 4px solid var(--primary);
+    position: relative;
+    overflow: hidden;
 }
 
-/* ===== TABS ===== */
-.chat-tabs {
+.user-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.user-card:active {
+    transform: scale(0.98);
+}
+
+.user-card:active::before {
+    opacity: 0.05;
+}
+
+.user-card.online { border-left-color: var(--success); }
+.user-card.idle { border-left-color: var(--warning); }
+.user-card.offline { border-left-color: var(--danger); }
+
+.user-header {
     display: flex;
-    gap: 5px;
+    justify-content: space-between;
+    align-items: flex-start;
     margin-bottom: 10px;
 }
-.chat-tab {
-    padding: 8px 16px;
-    background: #f0f0f0;
-    border: none;
-    border-radius: 8px 8px 0 0;
-    cursor: pointer;
-    font-size: 13px;
-    transition: all 0.2s;
+
+.user-id {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--primary);
+    word-break: break-all;
 }
-.chat-tab.active {
+
+.user-badges {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-top: 5px;
+}
+
+.badge {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.badge-vip { background: linear-gradient(135deg, #ffd700, #ffb300); color: #333; }
+.badge-locked { background: var(--danger); color: white; }
+.badge-online { background: var(--success); color: white; }
+.badge-idle { background: var(--warning); color: white; }
+.badge-offline { background: #ccc; color: #666; }
+
+.user-preview {
+    font-size: 13px;
+    color: #888;
+    margin: 10px 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.user-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #999;
+    padding-top: 10px;
+    border-top: 1px solid rgba(0,0,0,0.05);
+}
+
+/* ===== CHAT VIEW ===== */
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 60px);
+    background: var(--light-bg);
+}
+
+.chat-header-bar {
+    background: var(--light-card);
+    padding: 15px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    box-shadow: var(--shadow);
+}
+
+.chat-back {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--light-bg);
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 20px;
+}
+
+.chat-user-info {
+    flex: 1;
+}
+
+.chat-user-name {
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.chat-user-status {
+    font-size: 12px;
+    color: #888;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.message {
+    max-width: 85%;
+    padding: 12px 16px;
+    border-radius: 18px;
+    animation: slideUp 0.3s ease;
+    position: relative;
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.message-user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.message-sophia {
+    align-self: flex-start;
+    background: var(--light-card);
+    box-shadow: var(--shadow);
+    border-bottom-left-radius: 4px;
+}
+
+.message-admin {
+    align-self: flex-start;
+    background: linear-gradient(135deg, var(--warning), #d97706);
+    color: white;
+    border-bottom-left-radius: 4px;
+}
+
+.message-system {
+    align-self: center;
+    background: rgba(0,0,0,0.05);
+    color: #888;
+    font-size: 12px;
+    padding: 8px 16px;
+    border-radius: 20px;
+}
+
+.message-time {
+    font-size: 10px;
+    opacity: 0.7;
+    margin-top: 5px;
+}
+
+.message-label {
+    font-size: 10px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    opacity: 0.8;
+}
+
+/* ===== CHAT INPUT ===== */
+.chat-input-area {
+    background: var(--light-card);
+    padding: 15px;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.05);
+}
+
+.chat-input-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+.chat-input {
+    flex: 1;
+    padding: 14px 18px;
+    border: 2px solid #e0e0e0;
+    border-radius: 25px;
+    font-size: 16px;
+    resize: none;
+    max-height: 120px;
+    transition: all 0.3s;
+}
+
+.chat-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.send-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    color: white;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+    flex-shrink: 0;
+}
+
+.send-btn:active {
+    transform: scale(0.9);
+}
+
+/* ===== FLOATING ACTION BUTTON ===== */
+.fab {
+    position: fixed;
+    bottom: 90px;
+    right: 20px;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    color: white;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    box-shadow: var(--shadow-lg);
+    z-index: 90;
+    transition: all 0.3s;
+}
+
+.fab:active {
+    transform: scale(0.9);
+}
+
+.fab.open {
+    transform: rotate(45deg);
+}
+
+/* ===== BOTTOM SHEET ===== */
+.bottom-sheet-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 200;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s;
+}
+
+.bottom-sheet-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.bottom-sheet {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--light-card);
+    border-radius: 24px 24px 0 0;
+    padding: 20px;
+    z-index: 201;
+    transform: translateY(100%);
+    transition: transform 0.3s ease;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.bottom-sheet.active {
+    transform: translateY(0);
+}
+
+.bottom-sheet-handle {
+    width: 40px;
+    height: 4px;
+    background: #ddd;
+    border-radius: 2px;
+    margin: 0 auto 20px;
+}
+
+.bottom-sheet-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.action-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+}
+
+.action-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px 10px;
+    background: var(--light-bg);
+    border-radius: var(--radius);
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 13px;
+    color: var(--light-text);
+}
+
+.action-btn:active {
+    transform: scale(0.95);
+    background: rgba(102, 126, 234, 0.1);
+}
+
+.action-btn .icon {
+    font-size: 28px;
+}
+
+.action-btn.danger { color: var(--danger); }
+.action-btn.success { color: var(--success); }
+.action-btn.warning { color: var(--warning); }
+
+/* ===== QUICK REPLIES ===== */
+.quick-replies {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 10px 0;
+    -webkit-overflow-scrolling: touch;
+}
+
+.quick-reply {
+    flex: 0 0 auto;
+    padding: 10px 16px;
+    background: var(--light-bg);
+    border-radius: 20px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.quick-reply:active {
+    background: var(--primary);
+    color: white;
+}
+
+/* ===== PHOTO UPLOAD ===== */
+.photo-upload-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: var(--light-bg);
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.photo-preview-container {
+    display: none;
+    padding: 10px;
+    background: var(--light-bg);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+}
+
+.photo-preview-container.active {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.photo-preview-img {
+    width: 60px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 8px;
+}
+
+.photo-preview-remove {
+    margin-left: auto;
+    background: var(--danger);
+    color: white;
+    border: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+/* ===== TOAST ===== */
+.toast {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    padding: 14px 28px;
+    border-radius: 30px;
+    color: white;
+    font-weight: 500;
+    z-index: 1000;
+    opacity: 0;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+
+.toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+.toast.success { background: var(--success); }
+.toast.error { background: var(--danger); }
+
+/* ===== LOGIN ===== */
+.login-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    padding: 20px;
+}
+
+.login-card {
     background: white;
-    color: #667eea;
-    font-weight: bold;
+    padding: 40px 30px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    width: 100%;
+    max-width: 380px;
+}
+
+.login-logo {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.login-logo h1 {
+    color: var(--primary);
+    font-size: 28px;
+}
+
+.login-logo p {
+    color: #888;
+    font-size: 14px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.form-input {
+    width: 100%;
+    padding: 14px 18px;
+    border: 2px solid #e0e0e0;
+    border-radius: 12px;
+    font-size: 16px;
+    transition: all 0.3s;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.btn-primary {
+    width: 100%;
+    padding: 16px;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+.error-msg {
+    background: #fee;
+    color: var(--danger);
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+}
+
+/* ===== EMPTY STATE ===== */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #888;
+}
+
+.empty-state .icon {
+    font-size: 60px;
+    margin-bottom: 20px;
+}
+
+/* ===== PULL TO REFRESH ===== */
+.ptr-indicator {
+    text-align: center;
+    padding: 20px;
+    color: var(--primary);
+    display: none;
+}
+
+.ptr-indicator.active {
+    display: block;
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 768px) {
+    .hamburger {
+        display: flex;
+    }
+    
+    .header h1 {
+        font-size: 16px;
+    }
+    
+    .user-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .stat-card {
+        min-width: 110px;
+        padding: 12px;
+    }
+    
+    .stat-number {
+        font-size: 24px;
+    }
+    
+    .action-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+    }
+    
+    .action-btn {
+        padding: 15px 8px;
+        font-size: 11px;
+    }
+    
+    .action-btn .icon {
+        font-size: 24px;
+    }
+}
+
+/* ===== SKELETON LOADING ===== */
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: 8px;
+}
+
+@keyframes skeleton-loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* ===== SCROLLBAR ===== */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.2);
+    border-radius: 3px;
 }
 </style>
 """
@@ -757,11 +1088,9 @@ def get_all_users():
         for key in redis_client.scan_iter("chatlog:*"):
             parts = key.split(":")
             if len(parts) > 1:
-                uid = parts[1]
-                if uid not in users:
-                    users[uid] = None
-    except Exception as e:
-        logger.error(f"Erro ao buscar usuários: {e}")
+                users[parts[1]] = None
+    except:
+        pass
     return list(users.keys())
 
 def get_user_messages(uid):
@@ -769,14 +1098,13 @@ def get_user_messages(uid):
         return []
     messages = []
     try:
-        key = f"chatlog:{uid}"
-        logs = redis_client.lrange(key, 0, -1)
+        logs = redis_client.lrange(f"chatlog:{uid}", 0, -1)
         for log in logs:
             msg = parse_chat_message(log)
             if msg:
                 messages.append(msg)
-    except Exception as e:
-        logger.error(f"Erro ao buscar mensagens: {e}")
+    except:
+        pass
     return messages
 
 def parse_chat_message(log_line):
@@ -786,43 +1114,19 @@ def parse_chat_message(log_line):
             if end_bracket > 0:
                 timestamp_str = log_line[1:end_bracket]
                 remaining = log_line[end_bracket+2:]
-                
                 colon_pos = remaining.find(':')
                 if colon_pos > 0:
                     role = remaining[:colon_pos].strip().lower()
                     text = remaining[colon_pos+1:].strip()
-                    
                     role_map = {
-                        "user": "user",
-                        "sophia": "assistant",
-                        "admin": "admin",  # NOVO: role admin
-                        "system": "system",
-                        "action": "action",
-                        "info": "info",
-                        "error": "error",
-                        "blocked": "blocked",
+                        "user": "user", "sophia": "assistant", "admin": "admin",
+                        "system": "system", "action": "action", "info": "info",
+                        "error": "error", "blocked": "blocked",
                     }
-                    
-                    try:
-                        now = datetime.now()
-                        parts = timestamp_str.split(':')
-                        if len(parts) >= 2:
-                            msg_time = datetime(now.year, now.month, now.day, 
-                                              int(parts[0]), int(parts[1]), 
-                                              int(parts[2]) if len(parts) > 2 else 0)
-                            if msg_time > now:
-                                msg_time -= timedelta(days=1)
-                        else:
-                            msg_time = None
-                    except:
-                        msg_time = None
-                    
                     return {
                         "role": role_map.get(role, "system"),
-                        "original_role": role,
                         "text": text,
-                        "time": timestamp_str,
-                        "datetime": msg_time
+                        "time": timestamp_str
                     }
     except:
         pass
@@ -830,16 +1134,9 @@ def parse_chat_message(log_line):
 
 def get_user_stats(uid):
     stats = {
-        "total_messages": 0,
-        "user_messages": 0,
-        "sophia_messages": 0,
-        "admin_messages": 0,
-        "actions": 0,
-        "last_activity": None,
-        "last_message_preview": None,
-        "status": "offline",
-        "is_vip": False,
-        "is_locked": False
+        "total_messages": 0, "user_messages": 0, "sophia_messages": 0,
+        "last_activity": None, "last_message_preview": None,
+        "status": "offline", "is_vip": False, "is_locked": False
     }
     
     try:
@@ -860,33 +1157,28 @@ def get_user_stats(uid):
     stats["total_messages"] = len(messages)
     
     last_user_msg = None
-    
     for msg in messages:
-        role = msg.get("role", "")
-        if role == "user":
+        if msg["role"] == "user":
             stats["user_messages"] += 1
-            last_user_msg = msg.get("text", "")
-        elif role == "assistant":
+            last_user_msg = msg["text"]
+        elif msg["role"] == "assistant":
             stats["sophia_messages"] += 1
-        elif role == "admin":
-            stats["admin_messages"] += 1
-        elif role in ["action", "info"]:
-            stats["actions"] += 1
-        
-        if role == "user" and msg.get("datetime"):
-            if not stats["last_activity"] or msg["datetime"] > stats["last_activity"]:
-                stats["last_activity"] = msg["datetime"]
     
     if last_user_msg:
-        stats["last_message_preview"] = last_user_msg[:50] + "..." if len(last_user_msg) > 50 else last_user_msg
+        stats["last_message_preview"] = last_user_msg[:60] + "..." if len(last_user_msg) > 60 else last_user_msg
+    
+    try:
+        last_act = redis_client.get(f"last_activity:{uid}")
+        if last_act:
+            stats["last_activity"] = datetime.fromisoformat(last_act)
+    except:
+        pass
     
     if stats["last_activity"]:
-        diff = datetime.now() - stats["last_activity"]
-        minutes_diff = diff.total_seconds() / 60
-        
-        if minutes_diff < ONLINE_THRESHOLD:
+        diff = (datetime.now() - stats["last_activity"]).total_seconds() / 60
+        if diff < ONLINE_THRESHOLD:
             stats["status"] = "online"
-        elif minutes_diff < IDLE_THRESHOLD:
+        elif diff < IDLE_THRESHOLD:
             stats["status"] = "idle"
         else:
             stats["status"] = "offline"
@@ -896,7 +1188,7 @@ def get_user_stats(uid):
 def get_global_stats():
     users = get_all_users()
     total = len(users)
-    vips = online = idle = msgs = locked = 0
+    vips = online = idle = locked = 0
     
     for uid in users:
         s = get_user_stats(uid)
@@ -904,34 +1196,17 @@ def get_global_stats():
         if s["status"] == "online": online += 1
         elif s["status"] == "idle": idle += 1
         if s["is_locked"]: locked += 1
-        msgs += s["total_messages"]
     
-    return {
-        "total_users": total,
-        "vip_users": vips,
-        "online_users": online,
-        "idle_users": idle,
-        "locked_users": locked,
-        "total_messages": msgs
-    }
+    return {"total": total, "vips": vips, "online": online, "idle": idle, "locked": locked}
 
-def format_last_seen(last_activity):
-    if not last_activity:
+def format_time_ago(dt):
+    if not dt:
         return "Nunca"
-    
-    diff = datetime.now() - last_activity
-    seconds = diff.total_seconds()
-    
-    if seconds < 60:
-        return "Agora"
-    elif seconds < 3600:
-        return f"{int(seconds/60)}min"
-    elif seconds < 86400:
-        return f"{int(seconds/3600)}h"
-    elif seconds < 604800:
-        return f"{int(seconds/86400)}d"
-    else:
-        return last_activity.strftime("%d/%m")
+    diff = (datetime.now() - dt).total_seconds()
+    if diff < 60: return "Agora"
+    if diff < 3600: return f"{int(diff/60)}min"
+    if diff < 86400: return f"{int(diff/3600)}h"
+    return f"{int(diff/86400)}d"
 
 # ================= ROUTES =================
 @app.route("/")
@@ -946,32 +1221,32 @@ def login():
             session["authenticated"] = True
             session.permanent = True
             return redirect("/dashboard")
-        error = "Senha incorreta!"
+        error = "Senha incorreta"
     
     return f"""
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Login - Sophia Admin</title>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         {STYLES}
     </head>
     <body>
-        <div class="login-container">
+        <div class="login-page">
             <div class="login-card">
-                <div style="text-align: center; margin-bottom: 30px;">
-                    <h1 style="color: #667eea;"><i class="fas fa-robot"></i> Sophia AI</h1>
-                    <p style="color: #666;">Painel de Monitoramento v3.0</p>
+                <div class="login-logo">
+                    <h1>🤖 Sophia AI</h1>
+                    <p>Painel Administrativo v4.0</p>
                 </div>
-                {f'<div style="background: #fee; color: #c33; padding: 10px; border-radius: 5px; margin-bottom: 20px;">{error}</div>' if error else ''}
+                {f'<div class="error-msg">{error}</div>' if error else ''}
                 <form method="post">
                     <div class="form-group">
-                        <label><i class="fas fa-lock"></i> Senha:</label>
-                        <input type="password" name="password" placeholder="Digite a senha" required autofocus>
+                        <label>Senha de Acesso</label>
+                        <input type="password" name="password" class="form-input" placeholder="Digite a senha" required autofocus>
                     </div>
-                    <button type="submit" class="btn" style="width: 100%;">
+                    <button type="submit" class="btn-primary">
                         <i class="fas fa-sign-in-alt"></i> Entrar
                     </button>
                 </form>
@@ -987,183 +1262,162 @@ def dashboard():
         return redirect("/login")
     
     if not check_redis():
-        return "<h1>❌ Redis não conectado</h1>", 500
+        return "<h1>Redis não conectado</h1>", 500
     
-    filter_type = request.args.get('filter', 'online')
-    page = int(request.args.get('page', 1))
-    per_page = 24
+    filter_type = request.args.get('filter', 'all')
+    search = request.args.get('q', '').strip()
     
     all_users = get_all_users()
     stats = get_global_stats()
     
-    users_with_stats = []
-    for uid in all_users:
-        s = get_user_stats(uid)
-        users_with_stats.append((uid, s))
+    users_with_stats = [(uid, get_user_stats(uid)) for uid in all_users]
     
+    # Filtros
     filtered = []
     for uid, s in users_with_stats:
+        if search and search.lower() not in uid.lower():
+            continue
         if filter_type == 'vip' and not s['is_vip']:
             continue
-        elif filter_type == 'online' and s['status'] != 'online':
+        if filter_type == 'online' and s['status'] != 'online':
             continue
-        elif filter_type == 'idle' and s['status'] != 'idle':
+        if filter_type == 'idle' and s['status'] != 'idle':
             continue
-        elif filter_type == 'locked' and not s['is_locked']:
+        if filter_type == 'locked' and not s['is_locked']:
             continue
-        elif filter_type == 'recent':
-            if s['last_activity']:
-                hours_ago = (datetime.now() - s['last_activity']).total_seconds() / 3600
-                if hours_ago > RECENT_THRESHOLD:
-                    continue
-            else:
-                continue
-        
         filtered.append((uid, s))
     
     filtered.sort(key=lambda x: x[1]['last_activity'] or datetime.min, reverse=True)
     
-    total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
-    page = min(page, total_pages)
-    page_users = filtered[(page-1)*per_page : page*per_page]
-    
     users_html = ""
-    for uid, s in page_users:
-        status_class = f"status-{s['status']}"
-        card_class = s['status']
-        status_emoji = {"online": "🟢", "idle": "🟡", "offline": "🔴"}.get(s['status'], "🔴")
-        vip_badge = '<span class="badge-vip">👑 VIP</span>' if s['is_vip'] else ''
-        locked_badge = '<span class="badge-locked">🔒 TRAVADO</span>' if s['is_locked'] else ''
-        
-        last_seen = format_last_seen(s['last_activity'])
-        
-        last_msg_html = ""
-        if s['last_message_preview']:
-            last_msg_html = f'<div class="last-message">💬 {html.escape(s["last_message_preview"])}</div>'
+    for uid, s in filtered[:50]:  # Limita a 50
+        status_badge = {"online": "badge-online", "idle": "badge-idle", "offline": "badge-offline"}.get(s['status'], "badge-offline")
+        status_text = {"online": "Online", "idle": "Ausente", "offline": "Offline"}.get(s['status'], "Offline")
         
         users_html += f"""
-        <div class="user-card {card_class}" onclick="window.location.href='/chat/{uid}'">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div class="user-id">
-                    <i class="fas fa-user-circle"></i> {uid[:16]}{'...' if len(uid) > 16 else ''}
-                    {vip_badge}{locked_badge}
+        <div class="user-card {s['status']}" onclick="window.location.href='/chat/{uid}'">
+            <div class="user-header">
+                <div>
+                    <div class="user-id">{uid[:20]}{'...' if len(uid) > 20 else ''}</div>
+                    <div class="user-badges">
+                        <span class="badge {status_badge}">{status_text}</span>
+                        {'<span class="badge badge-vip">👑 VIP</span>' if s['is_vip'] else ''}
+                        {'<span class="badge badge-locked">🔒</span>' if s['is_locked'] else ''}
+                    </div>
                 </div>
-                <span class="status {status_class}">{status_emoji}</span>
             </div>
-            {last_msg_html}
-            <div class="user-stats">
-                <span><i class="fas fa-comments"></i> {s['total_messages']}</span>
-                <span><i class="fas fa-bolt"></i> {s['actions']}</span>
-                <span><i class="fas fa-clock"></i> {last_seen}</span>
+            {f'<div class="user-preview">💬 {html.escape(s["last_message_preview"])}</div>' if s['last_message_preview'] else ''}
+            <div class="user-meta">
+                <span>📊 {s['total_messages']} msgs</span>
+                <span>🕐 {format_time_ago(s['last_activity'])}</span>
             </div>
         </div>
         """
     
     if not users_html:
-        users_html = f'<div class="empty-state"><h3>😔 Nenhum usuário {filter_type}</h3><p>Tente outro filtro</p></div>'
-    
-    pagination_html = '<div class="pagination">'
-    if page > 1:
-        pagination_html += f'<a href="/dashboard?filter={filter_type}&page={page-1}"><i class="fas fa-chevron-left"></i></a>'
-    
-    start_page = max(1, page - 2)
-    end_page = min(total_pages, page + 2)
-    
-    for p in range(start_page, end_page + 1):
-        active = 'active' if p == page else ''
-        pagination_html += f'<a href="/dashboard?filter={filter_type}&page={p}" class="{active}">{p}</a>'
-    
-    if page < total_pages:
-        pagination_html += f'<a href="/dashboard?filter={filter_type}&page={page+1}"><i class="fas fa-chevron-right"></i></a>'
-    pagination_html += '</div>'
-    
-    token_status = "✅ Configurado" if TELEGRAM_TOKEN else "❌ Não configurado"
+        users_html = '<div class="empty-state"><div class="icon">😔</div><p>Nenhum usuário encontrado</p></div>'
     
     return f"""
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Dashboard - Sophia Admin v3</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>Dashboard - Sophia Admin</title>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         {STYLES}
     </head>
     <body>
+        <header class="header">
+            <div class="header-left">
+                <div class="hamburger" onclick="toggleMenu()">
+                    <span></span><span></span><span></span>
+                </div>
+                <h1>🤖 Sophia Admin</h1>
+            </div>
+            <div class="header-actions">
+                <div class="theme-toggle" onclick="toggleTheme()"></div>
+                <a href="/logout" style="color: white; font-size: 20px; padding: 10px;"><i class="fas fa-sign-out-alt"></i></a>
+            </div>
+        </header>
+        
         <div class="container">
-            <div class="header">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h1><i class="fas fa-chart-line"></i> Dashboard Sophia AI v3.0</h1>
-                        <p style="margin-top: 5px; opacity: 0.8;">
-                            Monitoramento + Chat em Tempo Real • {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
-                            <br><small>📡 Telegram: {token_status}</small>
-                        </p>
-                    </div>
-                    <a href="/logout" class="btn btn-secondary"><i class="fas fa-sign-out-alt"></i> Sair</a>
+            <!-- Search -->
+            <div class="search-container">
+                <i class="fas fa-search search-icon"></i>
+                <input type="text" class="search-input" placeholder="Buscar usuário por ID..." 
+                       value="{html.escape(search)}" onkeyup="handleSearch(event)">
+            </div>
+            
+            <!-- Stats -->
+            <div class="stats-scroll">
+                <div class="stat-card">
+                    <div class="stat-number">{stats['total']}</div>
+                    <div class="stat-label">👥 Total</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="--primary: #10b981;">{stats['online']}</div>
+                    <div class="stat-label">🟢 Online</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="--primary: #f59e0b;">{stats['idle']}</div>
+                    <div class="stat-label">🟡 Ausentes</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="--primary: #ffd700;">{stats['vips']}</div>
+                    <div class="stat-label">👑 VIPs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="--primary: #ef4444;">{stats['locked']}</div>
+                    <div class="stat-label">🔒 Travados</div>
                 </div>
             </div>
             
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-number">{stats['total_users']}</div>
-                    <div class="stat-label"><i class="fas fa-users"></i> Total de Usuários</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" style="color: #10b981;">{stats['online_users']}</div>
-                    <div class="stat-label"><i class="fas fa-circle"></i> Online Agora</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" style="color: #f59e0b;">{stats['idle_users']}</div>
-                    <div class="stat-label"><i class="fas fa-moon"></i> Ausentes</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" style="color: #f59e0b;">{stats['vip_users']}</div>
-                    <div class="stat-label"><i class="fas fa-crown"></i> VIPs Ativos</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" style="color: #ef4444;">{stats['locked_users']}</div>
-                    <div class="stat-label"><i class="fas fa-lock"></i> Travados Hoje</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" style="color: #667eea;">{stats['total_messages']}</div>
-                    <div class="stat-label"><i class="fas fa-comment-dots"></i> Total de Msgs</div>
-                </div>
+            <!-- Filters -->
+            <div class="filter-chips">
+                <div class="chip {'active' if filter_type == 'all' else ''}" onclick="setFilter('all')">Todos</div>
+                <div class="chip {'active' if filter_type == 'online' else ''}" onclick="setFilter('online')">🟢 Online</div>
+                <div class="chip {'active' if filter_type == 'idle' else ''}" onclick="setFilter('idle')">🟡 Ausentes</div>
+                <div class="chip {'active' if filter_type == 'vip' else ''}" onclick="setFilter('vip')">👑 VIPs</div>
+                <div class="chip {'active' if filter_type == 'locked' else ''}" onclick="setFilter('locked')">🔒 Travados</div>
             </div>
             
-            <div style="background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px;">
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
-                    <a href="/dashboard?filter=online" class="btn {'btn-secondary' if filter_type != 'online' else ''}">
-                        <i class="fas fa-circle"></i> Online ({stats['online_users']})
-                    </a>
-                    <a href="/dashboard?filter=idle" class="btn {'btn-secondary' if filter_type != 'idle' else ''}">
-                        <i class="fas fa-moon"></i> Ausentes ({stats['idle_users']})
-                    </a>
-                    <a href="/dashboard?filter=recent" class="btn {'btn-secondary' if filter_type != 'recent' else ''}">
-                        <i class="fas fa-clock"></i> Recentes (24h)
-                    </a>
-                    <a href="/dashboard?filter=vip" class="btn {'btn-secondary' if filter_type != 'vip' else ''}">
-                        <i class="fas fa-crown"></i> VIPs ({stats['vip_users']})
-                    </a>
-                    <a href="/dashboard?filter=locked" class="btn {'btn-secondary' if filter_type != 'locked' else ''}">
-                        <i class="fas fa-lock"></i> Travados ({stats['locked_users']})
-                    </a>
-                    <a href="/dashboard?filter=all" class="btn {'btn-secondary' if filter_type != 'all' else ''}">
-                        <i class="fas fa-list"></i> Todos ({stats['total_users']})
-                    </a>
-                </div>
-            </div>
-            
-            <div class="user-list">{users_html}</div>
-            
-            {pagination_html if len(filtered) > per_page else ''}
-            
-            <div style="text-align: center; margin-top: 20px;">
-                <button class="btn" onclick="location.reload()">
-                    <i class="fas fa-sync-alt"></i> Atualizar
-                </button>
-            </div>
+            <!-- Users -->
+            <div class="user-grid">{users_html}</div>
         </div>
+        
+        <div class="toast" id="toast"></div>
+        
+        <script>
+            // Theme
+            if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
+            
+            function toggleTheme() {{
+                document.body.classList.toggle('dark');
+                localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+            }}
+            
+            // Search
+            let searchTimeout;
+            function handleSearch(e) {{
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {{
+                    const q = e.target.value;
+                    window.location.href = '/dashboard?q=' + encodeURIComponent(q) + '&filter={filter_type}';
+                }}, 500);
+            }}
+            
+            // Filter
+            function setFilter(filter) {{
+                const search = document.querySelector('.search-input').value;
+                window.location.href = '/dashboard?filter=' + filter + (search ? '&q=' + encodeURIComponent(search) : '');
+            }}
+            
+            // Menu
+            function toggleMenu() {{
+                document.querySelector('.hamburger').classList.toggle('active');
+            }}
+        </script>
     </body>
     </html>
     """
@@ -1178,485 +1432,309 @@ def chat_view(uid):
     
     messages_html = ""
     for msg in messages:
-        role = msg.get("role", "system")
-        text = html.escape(msg.get("text", ""))
-        time_str = msg.get("time", "")
+        role = msg["role"]
+        text = html.escape(msg["text"])
+        time_str = msg["time"]
         
         if role == "user":
-            messages_html += f"""
-            <div class="message message-user">
-                <div class="message-sender">👤 USUÁRIO</div>
-                <div>{text}</div>
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
+            messages_html += f'<div class="message message-user"><div class="message-label">Usuário</div>{text}<div class="message-time">{time_str}</div></div>'
         elif role == "assistant":
-            messages_html += f"""
-            <div class="message message-sophia">
-                <div class="message-sender">🤖 SOPHIA (auto)</div>
-                <div>{text}</div>
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
+            messages_html += f'<div class="message message-sophia"><div class="message-label">🤖 Sophia</div>{text}<div class="message-time">{time_str}</div></div>'
         elif role == "admin":
-            messages_html += f"""
-            <div class="message message-admin">
-                <div>{text}</div>
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
-        elif role == "action":
-            messages_html += f"""
-            <div class="message message-action">
-                <strong>⚡ AÇÃO:</strong> {text}
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
-        elif role == "info":
-            messages_html += f"""
-            <div class="message message-info">
-                <strong>ℹ️ INFO:</strong> {text}
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
-        elif role == "error":
-            messages_html += f"""
-            <div class="message message-error">
-                <strong>❌ ERRO:</strong> {text}
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
-        elif role == "blocked":
-            messages_html += f"""
-            <div class="message message-blocked">
-                <strong>🚫 BLOQUEADO:</strong> {text}
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
+            messages_html += f'<div class="message message-admin"><div class="message-label">👑 Admin</div>{text}<div class="message-time">{time_str}</div></div>'
         else:
-            messages_html += f"""
-            <div class="message message-system">
-                <strong>📋 SISTEMA:</strong> {text}
-                <div class="message-time">{time_str}</div>
-            </div>
-            """
+            messages_html += f'<div class="message message-system">⚡ {text}</div>'
     
     if not messages_html:
-        messages_html = '<div class="empty-state"><h3>📭 Nenhuma mensagem ainda</h3></div>'
+        messages_html = '<div class="empty-state"><div class="icon">📭</div><p>Nenhuma mensagem</p></div>'
     
-    vip_badge = '👑 VIP' if stats['is_vip'] else '💬 FREE'
-    locked_badge = '🔒 TRAVADO' if stats['is_locked'] else '✅ ATIVO'
-    status_emoji = {"online": "🟢", "idle": "🟡", "offline": "🔴"}.get(stats['status'], "🔴")
-    status_text = {"online": "ONLINE", "idle": "AUSENTE", "offline": "OFFLINE"}.get(stats['status'], "OFFLINE")
-    
-    last_seen = format_last_seen(stats['last_activity'])
-    
-    token_warning = ""
-    if not TELEGRAM_TOKEN:
-        token_warning = '<div class="token-warning">⚠️ TELEGRAM_TOKEN não configurado. O envio de mensagens está desabilitado.</div>'
+    status_text = {"online": "🟢 Online", "idle": "🟡 Ausente", "offline": "🔴 Offline"}.get(stats['status'], "")
+    badges = []
+    if stats['is_vip']: badges.append("👑 VIP")
+    if stats['is_locked']: badges.append("🔒 Travado")
     
     return f"""
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Chat - {uid[:12]}</title>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         {STYLES}
     </head>
     <body>
-        <div class="container">
-            <div class="header">
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
-                    <div style="flex: 1; min-width: 300px;">
-                        <h1 style="font-size: 18px; margin-bottom: 8px;"><i class="fas fa-comments"></i> {uid[:30]}{'...' if len(uid) > 30 else ''}</h1>
-                        <div style="display: flex; gap: 15px; flex-wrap: wrap; font-size: 13px;">
-                            <span>{status_emoji} <strong>{status_text}</strong></span>
-                            <span>📊 {stats['total_messages']} mensagens</span>
-                            <span>👤 {stats['user_messages']} do usuário</span>
-                            <span>🤖 {stats['sophia_messages']} da Sophia</span>
-                            <span>👑 {stats['admin_messages']} do admin</span>
-                            <span>🕐 Visto: {last_seen}</span>
-                        </div>
-                        <div style="margin-top: 8px;">
-                            <span class="badge-vip" style="margin-left: 0;">{vip_badge}</span>
-                            <span class="{'badge-locked' if stats['is_locked'] else 'badge-vip'}" style="background: {'#ef4444' if stats['is_locked'] else '#10b981'};">{locked_badge}</span>
-                        </div>
-                    </div>
-                    <div style="display: flex; gap: 10px;">
-                        <a href="/dashboard" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Voltar</a>
-                        <button class="btn" onclick="location.reload()"><i class="fas fa-sync-alt"></i> Atualizar</button>
-                    </div>
+        <div class="chat-container">
+            <!-- Header -->
+            <div class="chat-header-bar">
+                <div class="chat-back" onclick="window.location.href='/dashboard'">
+                    <i class="fas fa-arrow-left"></i>
+                </div>
+                <div class="chat-user-info">
+                    <div class="chat-user-name">{uid[:25]}{'...' if len(uid) > 25 else ''}</div>
+                    <div class="chat-user-status">{status_text} {' • '.join(badges)}</div>
+                </div>
+                <div style="font-size: 20px; padding: 10px; cursor: pointer;" onclick="location.reload()">
+                    <i class="fas fa-sync-alt"></i>
                 </div>
             </div>
             
-            {token_warning}
-            
-            <!-- PAINEL DE ATALHOS -->
-            <div class="shortcuts-panel">
-                <div class="shortcuts-title">⚡ Ações Rápidas</div>
-                <div class="shortcuts-grid">
-                    <button class="shortcut-btn shortcut-vip" onclick="executeAction('setvip')">👑 Ativar VIP (15 dias)</button>
-                    <button class="shortcut-btn shortcut-success" onclick="executeAction('bonus5')">🎁 +5 Msgs Bônus</button>
-                    <button class="shortcut-btn shortcut-success" onclick="executeAction('bonus10')">🎁 +10 Msgs Bônus</button>
-                    <button class="shortcut-btn shortcut-action" onclick="executeAction('reset')">🔄 Resetar Limite</button>
-                    <button class="shortcut-btn shortcut-action" onclick="executeAction('clearmemory')">🧠 Limpar Memória</button>
-                    <button class="shortcut-btn shortcut-action" onclick="executeAction('unpause')">▶️ Despausar Gatilhos</button>
-                    <button class="shortcut-btn shortcut-danger" onclick="executeAction('blacklist')">🚫 Bloquear</button>
-                    <button class="shortcut-btn shortcut-success" onclick="executeAction('unblacklist')">✅ Desbloquear</button>
-                </div>
-                
-                <div class="shortcuts-title" style="margin-top: 15px;">💬 Mensagens Rápidas</div>
-                <div class="shortcuts-grid">
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Oi amor! 💕')">👋 Oi amor</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Tudo bem com você? 🥰')">❓ Tudo bem?</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Senti sua falta... 🥺')">😢 Senti falta</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Bom dia! ☀️ Como você dormiu?')">🌅 Bom dia</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Boa noite amor! 🌙 Durma bem 💕')">🌙 Boa noite</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Te adoro! 💖')">💖 Te adoro</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Vem conversar comigo? 😘')">💬 Vem conversar</button>
-                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Tô com saudade de você... 🥺💕')">💭 Saudade</button>
-                    <button class="shortcut-btn shortcut-vip" onclick="setMessage('💖 Seu VIP foi ativado! Agora a gente pode conversar sem limite 😘')">👑 VIP Ativado</button>
-                    <button class="shortcut-btn shortcut-vip" onclick="setMessage('🎁 Te dei mensagens extras de presente! Aproveita pra gente conversar mais 💕')">🎁 Bônus dado</button>
-                </div>
-                
-                <div class="shortcuts-title" style="margin-top: 15px;">📸 Enviar Mídia</div>
-                <div class="shortcuts-grid">
-                    <button class="shortcut-btn shortcut-action" onclick="togglePhotoUpload()">📷 Enviar Foto</button>
-                </div>
-                
-                <!-- Área de upload de foto -->
-                <div class="photo-upload-area" id="photoUploadArea">
-                    <input type="file" id="photoInput" accept="image/*" style="display: none;" onchange="previewPhoto(event)">
-                    <p>📷 Arraste uma foto aqui ou <a href="#" onclick="document.getElementById('photoInput').click(); return false;">clique para selecionar</a></p>
-                    <img id="photoPreview" class="photo-preview">
-                    <input type="text" id="photoCaption" placeholder="Legenda (opcional)" style="width: 100%; padding: 8px; margin-top: 10px; border: 1px solid #ddd; border-radius: 5px;">
-                    <button class="upload-btn" id="sendPhotoBtn" onclick="sendPhoto()" disabled>📤 Enviar Foto</button>
-                </div>
+            <!-- Messages -->
+            <div class="chat-messages" id="chatMessages">
+                {messages_html}
             </div>
             
-            <div class="legend">
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #667eea, #764ba2);"></div> Usuário</div>
-                <div class="legend-item"><div class="legend-color" style="background: white; border: 1px solid #ccc;"></div> Sophia (auto)</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #f59e0b, #d97706);"></div> Admin (você)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #e3f2fd;"></div> Ações</div>
-                <div class="legend-item"><div class="legend-color" style="background: #f3e5f5;"></div> Info</div>
+            <!-- Quick Replies -->
+            <div class="quick-replies" style="padding: 0 15px;">
+                <div class="quick-reply" onclick="setMessage('Oi amor! 💕')">Oi amor</div>
+                <div class="quick-reply" onclick="setMessage('Tudo bem? 🥰')">Tudo bem?</div>
+                <div class="quick-reply" onclick="setMessage('Senti sua falta... 🥺')">Senti falta</div>
+                <div class="quick-reply" onclick="setMessage('Te adoro! 💖')">Te adoro</div>
+                <div class="quick-reply" onclick="setMessage('Bom dia! ☀️')">Bom dia</div>
+                <div class="quick-reply" onclick="setMessage('Boa noite! 🌙')">Boa noite</div>
             </div>
             
-            <div class="chat-view">
-                <div class="chat-header">
-                    <div>
-                        <strong>ID:</strong>
-                        <code style="font-size: 11px; background: #f0f0f0; padding: 4px 8px; border-radius: 4px;">{uid}</code>
-                    </div>
-                    <span style="font-size: 12px; color: #666;">{datetime.now().strftime('%H:%M:%S')}</span>
-                </div>
-                <div class="chat-messages" id="chat">{messages_html}</div>
-                
-                <!-- INPUT DE CHAT -->
-                <div class="chat-input-container">
-                    <form class="chat-input-form" id="chatForm" onsubmit="sendMessage(event)">
-                        <input 
-                            type="text" 
-                            class="chat-input" 
-                            id="messageInput" 
-                            placeholder="Digite como Sophia (será marcado como [ADMIN])..."
-                            autocomplete="off"
-                            {'disabled' if not TELEGRAM_TOKEN else ''}
-                        >
-                        <button type="submit" class="chat-send-btn" id="sendBtn" {'disabled' if not TELEGRAM_TOKEN else ''}>
-                            <i class="fas fa-paper-plane"></i> Enviar
-                        </button>
-                    </form>
-                    <div class="sending-indicator" id="sendingIndicator">
-                        <i class="fas fa-spinner fa-spin"></i> Enviando...
-                    </div>
+            <!-- Photo Preview -->
+            <div class="photo-preview-container" id="photoPreview">
+                <img id="previewImg" class="photo-preview-img">
+                <span id="photoName">foto.jpg</span>
+                <button class="photo-preview-remove" onclick="removePhoto()">✕</button>
+            </div>
+            
+            <!-- Input -->
+            <div class="chat-input-area">
+                <div class="chat-input-row">
+                    <button class="photo-upload-btn" onclick="document.getElementById('photoInput').click()">
+                        <i class="fas fa-camera"></i>
+                    </button>
+                    <input type="file" id="photoInput" accept="image/*" style="display:none" onchange="previewPhoto(event)">
+                    <input type="text" class="chat-input" id="messageInput" placeholder="Digite sua mensagem...">
+                    <button class="send-btn" onclick="sendMessage()">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
                 </div>
             </div>
         </div>
         
-        <div class="success-toast" id="successToast">✅ Mensagem enviada!</div>
-        <div class="error-toast" id="errorToast">❌ Erro ao enviar</div>
+        <!-- FAB -->
+        <button class="fab" id="fab" onclick="toggleBottomSheet()">
+            <i class="fas fa-bolt"></i>
+        </button>
+        
+        <!-- Bottom Sheet -->
+        <div class="bottom-sheet-overlay" id="overlay" onclick="toggleBottomSheet()"></div>
+        <div class="bottom-sheet" id="bottomSheet">
+            <div class="bottom-sheet-handle"></div>
+            <div class="bottom-sheet-title">⚡ Ações Rápidas</div>
+            <div class="action-grid">
+                <button class="action-btn warning" onclick="executeAction('setvip')">
+                    <span class="icon">👑</span>
+                    <span>Ativar VIP</span>
+                </button>
+                <button class="action-btn success" onclick="executeAction('bonus5')">
+                    <span class="icon">🎁</span>
+                    <span>+5 Msgs</span>
+                </button>
+                <button class="action-btn success" onclick="executeAction('bonus10')">
+                    <span class="icon">🎁</span>
+                    <span>+10 Msgs</span>
+                </button>
+                <button class="action-btn" onclick="executeAction('reset')">
+                    <span class="icon">🔄</span>
+                    <span>Resetar</span>
+                </button>
+                <button class="action-btn" onclick="executeAction('clearmemory')">
+                    <span class="icon">🧠</span>
+                    <span>Limpar Mem.</span>
+                </button>
+                <button class="action-btn" onclick="executeAction('unpause')">
+                    <span class="icon">▶️</span>
+                    <span>Despausar</span>
+                </button>
+                <button class="action-btn danger" onclick="executeAction('blacklist')">
+                    <span class="icon">🚫</span>
+                    <span>Bloquear</span>
+                </button>
+                <button class="action-btn success" onclick="executeAction('unblacklist')">
+                    <span class="icon">✅</span>
+                    <span>Desbloquear</span>
+                </button>
+                <button class="action-btn" onclick="toggleBottomSheet(); setMessage('💖 Seu VIP foi ativado! Agora a gente pode conversar sem limite 😘')">
+                    <span class="icon">💬</span>
+                    <span>Msg VIP</span>
+                </button>
+            </div>
+        </div>
+        
+        <div class="toast" id="toast"></div>
         
         <script>
-            // Scroll para o final
-            const chatDiv = document.getElementById('chat');
-            chatDiv.scrollTop = chatDiv.scrollHeight;
+            // Theme
+            if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
             
-            // Definir mensagem no input
+            // Scroll to bottom
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            // Bottom Sheet
+            function toggleBottomSheet() {{
+                document.getElementById('overlay').classList.toggle('active');
+                document.getElementById('bottomSheet').classList.toggle('active');
+                document.getElementById('fab').classList.toggle('open');
+            }}
+            
+            // Set message
             function setMessage(text) {{
                 document.getElementById('messageInput').value = text;
                 document.getElementById('messageInput').focus();
             }}
             
-            // Toggle área de upload de foto
-            function togglePhotoUpload() {{
-                const area = document.getElementById('photoUploadArea');
-                area.classList.toggle('active');
-            }}
-            
-            // Preview da foto
+            // Photo handling
             let selectedPhoto = null;
+            
             function previewPhoto(event) {{
                 const file = event.target.files[0];
                 if (file) {{
                     selectedPhoto = file;
                     const reader = new FileReader();
-                    reader.onload = function(e) {{
-                        const preview = document.getElementById('photoPreview');
-                        preview.src = e.target.result;
-                        preview.classList.add('active');
-                        document.getElementById('sendPhotoBtn').disabled = false;
+                    reader.onload = (e) => {{
+                        document.getElementById('previewImg').src = e.target.result;
+                        document.getElementById('photoName').textContent = file.name;
+                        document.getElementById('photoPreview').classList.add('active');
                     }};
                     reader.readAsDataURL(file);
                 }}
             }}
             
-            // Drag and drop para foto
-            const uploadArea = document.getElementById('photoUploadArea');
-            if (uploadArea) {{
-                uploadArea.addEventListener('dragover', (e) => {{
-                    e.preventDefault();
-                    uploadArea.classList.add('dragover');
-                }});
-                uploadArea.addEventListener('dragleave', () => {{
-                    uploadArea.classList.remove('dragover');
-                }});
-                uploadArea.addEventListener('drop', (e) => {{
-                    e.preventDefault();
-                    uploadArea.classList.remove('dragover');
-                    const file = e.dataTransfer.files[0];
-                    if (file && file.type.startsWith('image/')) {{
-                        selectedPhoto = file;
-                        const reader = new FileReader();
-                        reader.onload = function(ev) {{
-                            const preview = document.getElementById('photoPreview');
-                            preview.src = ev.target.result;
-                            preview.classList.add('active');
-                            document.getElementById('sendPhotoBtn').disabled = false;
-                        }};
-                        reader.readAsDataURL(file);
-                    }}
-                }});
+            function removePhoto() {{
+                selectedPhoto = null;
+                document.getElementById('photoPreview').classList.remove('active');
+                document.getElementById('photoInput').value = '';
             }}
             
-            // Enviar foto
-            async function sendPhoto() {{
-                if (!selectedPhoto) return;
-                
-                const btn = document.getElementById('sendPhotoBtn');
-                const caption = document.getElementById('photoCaption').value;
-                btn.disabled = true;
-                btn.textContent = '📤 Enviando...';
-                
-                const formData = new FormData();
-                formData.append('photo', selectedPhoto);
-                formData.append('caption', caption);
-                
-                try {{
-                    const response = await fetch('/send-photo/{uid}', {{
-                        method: 'POST',
-                        body: formData
-                    }});
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {{
-                        document.getElementById('successToast').textContent = '✅ Foto enviada!';
-                        document.getElementById('successToast').style.display = 'block';
-                        setTimeout(() => {{
-                            document.getElementById('successToast').style.display = 'none';
-                        }}, 2000);
-                        
-                        // Limpar
-                        selectedPhoto = null;
-                        document.getElementById('photoPreview').classList.remove('active');
-                        document.getElementById('photoCaption').value = '';
-                        document.getElementById('photoInput').value = '';
-                        btn.disabled = true;
-                        
-                        setTimeout(() => location.reload(), 1000);
-                    }} else {{
-                        document.getElementById('errorToast').textContent = '❌ ' + (data.error || 'Erro ao enviar');
-                        document.getElementById('errorToast').style.display = 'block';
-                        setTimeout(() => {{
-                            document.getElementById('errorToast').style.display = 'none';
-                        }}, 3000);
-                    }}
-                }} catch (err) {{
-                    document.getElementById('errorToast').textContent = '❌ Erro de conexão';
-                    document.getElementById('errorToast').style.display = 'block';
-                    setTimeout(() => {{
-                        document.getElementById('errorToast').style.display = 'none';
-                    }}, 3000);
-                }} finally {{
-                    btn.textContent = '📤 Enviar Foto';
-                    btn.disabled = !selectedPhoto;
-                }}
-            }}
-            
-            // Executar ação admin
-            async function executeAction(action) {{
-                if (action === 'blacklist' && !confirm('⚠️ Tem certeza que quer BLOQUEAR este usuário?')) {{
-                    return;
-                }}
-                
-                try {{
-                    const response = await fetch('/action/{uid}/' + action, {{
-                        method: 'POST'
-                    }});
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {{
-                        document.getElementById('successToast').textContent = '✅ ' + data.message;
-                        document.getElementById('successToast').style.display = 'block';
-                        setTimeout(() => {{
-                            document.getElementById('successToast').style.display = 'none';
-                            location.reload();
-                        }}, 1500);
-                    }} else {{
-                        document.getElementById('errorToast').textContent = '❌ ' + (data.error || 'Erro');
-                        document.getElementById('errorToast').style.display = 'block';
-                        setTimeout(() => {{
-                            document.getElementById('errorToast').style.display = 'none';
-                        }}, 3000);
-                    }}
-                }} catch (err) {{
-                    document.getElementById('errorToast').textContent = '❌ Erro de conexão';
-                    document.getElementById('errorToast').style.display = 'block';
-                    setTimeout(() => {{
-                        document.getElementById('errorToast').style.display = 'none';
-                    }}, 3000);
-                }}
-            }}
-            
-            // Envio de mensagem
-            async function sendMessage(e) {{
-                e.preventDefault();
-                
+            // Send message
+            async function sendMessage() {{
                 const input = document.getElementById('messageInput');
-                const btn = document.getElementById('sendBtn');
-                const indicator = document.getElementById('sendingIndicator');
                 const message = input.value.trim();
                 
-                if (!message) return;
-                
-                // Desabilita
-                input.disabled = true;
-                btn.disabled = true;
-                indicator.classList.add('active');
-                
-                try {{
-                    const response = await fetch('/send/{uid}', {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-                        body: 'message=' + encodeURIComponent(message)
-                    }});
+                if (selectedPhoto) {{
+                    // Send photo
+                    const formData = new FormData();
+                    formData.append('photo', selectedPhoto);
+                    formData.append('caption', message);
                     
-                    const data = await response.json();
+                    showToast('Enviando foto...', 'success');
                     
-                    if (data.success) {{
-                        // Mostra toast de sucesso
-                        document.getElementById('successToast').textContent = '✅ Mensagem enviada!';
-                        document.getElementById('successToast').style.display = 'block';
-                        setTimeout(() => {{
-                            document.getElementById('successToast').style.display = 'none';
-                        }}, 2000);
-                        
-                        // Limpa input
-                        input.value = '';
-                        
-                        // Recarrega após 1s para mostrar a mensagem
-                        setTimeout(() => location.reload(), 1000);
-                    }} else {{
-                        document.getElementById('errorToast').textContent = '❌ ' + (data.error || 'Erro ao enviar');
-                        document.getElementById('errorToast').style.display = 'block';
-                        setTimeout(() => {{
-                            document.getElementById('errorToast').style.display = 'none';
-                        }}, 3000);
+                    try {{
+                        const resp = await fetch('/send-photo/{uid}', {{ method: 'POST', body: formData }});
+                        const data = await resp.json();
+                        if (data.success) {{
+                            showToast('✅ Foto enviada!', 'success');
+                            removePhoto();
+                            input.value = '';
+                            setTimeout(() => location.reload(), 1000);
+                        }} else {{
+                            showToast('❌ ' + data.error, 'error');
+                        }}
+                    }} catch(e) {{
+                        showToast('❌ Erro de conexão', 'error');
                     }}
-                }} catch (err) {{
-                    document.getElementById('errorToast').style.display = 'block';
-                    setTimeout(() => {{
-                        document.getElementById('errorToast').style.display = 'none';
-                    }}, 3000);
-                }} finally {{
-                    input.disabled = false;
-                    btn.disabled = false;
-                    indicator.classList.remove('active');
-                    input.focus();
+                }} else if (message) {{
+                    // Send text
+                    try {{
+                        const resp = await fetch('/send/{uid}', {{
+                            method: 'POST',
+                            headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+                            body: 'message=' + encodeURIComponent(message)
+                        }});
+                        const data = await resp.json();
+                        if (data.success) {{
+                            showToast('✅ Enviado!', 'success');
+                            input.value = '';
+                            setTimeout(() => location.reload(), 1000);
+                        }} else {{
+                            showToast('❌ ' + data.error, 'error');
+                        }}
+                    }} catch(e) {{
+                        showToast('❌ Erro de conexão', 'error');
+                    }}
                 }}
             }}
             
-            // Auto-refresh a cada 30 segundos
+            // Execute action
+            async function executeAction(action) {{
+                if (action === 'blacklist' && !confirm('Bloquear este usuário?')) return;
+                
+                toggleBottomSheet();
+                showToast('Executando...', 'success');
+                
+                try {{
+                    const resp = await fetch('/action/{uid}/' + action, {{ method: 'POST' }});
+                    const data = await resp.json();
+                    if (data.success) {{
+                        showToast('✅ ' + data.message, 'success');
+                        setTimeout(() => location.reload(), 1500);
+                    }} else {{
+                        showToast('❌ ' + data.error, 'error');
+                    }}
+                }} catch(e) {{
+                    showToast('❌ Erro', 'error');
+                }}
+            }}
+            
+            // Toast
+            function showToast(message, type) {{
+                const toast = document.getElementById('toast');
+                toast.textContent = message;
+                toast.className = 'toast ' + type + ' show';
+                setTimeout(() => toast.classList.remove('show'), 3000);
+            }}
+            
+            // Enter to send
+            document.getElementById('messageInput').addEventListener('keypress', (e) => {{
+                if (e.key === 'Enter') sendMessage();
+            }});
+            
+            // Auto refresh
             setTimeout(() => location.reload(), 30000);
         </script>
     </body>
     </html>
     """
 
-# ================= API DE ENVIO =================
+# ================= APIs =================
 @app.route("/send/<uid>", methods=["POST"])
 def send_message_route(uid):
     if not session.get("authenticated"):
         return jsonify({"success": False, "error": "Não autorizado"}), 401
     
-    if not TELEGRAM_TOKEN:
-        return jsonify({"success": False, "error": "Token do Telegram não configurado"}), 400
-    
     message = request.form.get("message", "").strip()
     if not message:
         return jsonify({"success": False, "error": "Mensagem vazia"}), 400
     
-    # Envia via Telegram
     success, error = send_telegram_message(uid, message)
-    
     if success:
-        # Salva no log como ADMIN
         save_admin_message(uid, message)
-        logger.info(f"📤 [ADMIN] Mensagem enviada para {uid}: {message[:50]}...")
         return jsonify({"success": True})
-    else:
-        logger.error(f"❌ Erro ao enviar para {uid}: {error}")
-        return jsonify({"success": False, "error": error}), 500
+    return jsonify({"success": False, "error": error}), 500
 
-# ================= API DE ENVIO DE FOTO =================
 @app.route("/send-photo/<uid>", methods=["POST"])
 def send_photo_route(uid):
     if not session.get("authenticated"):
         return jsonify({"success": False, "error": "Não autorizado"}), 401
     
-    if not TELEGRAM_TOKEN:
-        return jsonify({"success": False, "error": "Token do Telegram não configurado"}), 400
-    
     if 'photo' not in request.files:
-        return jsonify({"success": False, "error": "Nenhuma foto enviada"}), 400
+        return jsonify({"success": False, "error": "Nenhuma foto"}), 400
     
     photo = request.files['photo']
     caption = request.form.get("caption", "").strip()
     
-    if photo.filename == '':
-        return jsonify({"success": False, "error": "Arquivo inválido"}), 400
-    
-    # Lê os dados da foto
-    photo_data = photo.read()
-    
-    # Envia via Telegram
-    success, error = send_telegram_photo(uid, photo_data, caption)
-    
+    success, error = send_telegram_photo(uid, photo.read(), caption)
     if success:
-        # Salva no log
-        log_text = f"[📷 FOTO ENVIADA]{' - ' + caption if caption else ''}"
-        save_admin_message(uid, log_text)
-        logger.info(f"📷 [ADMIN] Foto enviada para {uid}")
+        save_admin_message(uid, f"[📷 FOTO]{' - ' + caption if caption else ''}")
         return jsonify({"success": True})
-    else:
-        logger.error(f"❌ Erro ao enviar foto para {uid}: {error}")
-        return jsonify({"success": False, "error": error}), 500
+    return jsonify({"success": False, "error": error}), 500
 
-# ================= API DE AÇÕES ADMIN =================
 @app.route("/action/<uid>/<action>", methods=["POST"])
 def action_route(uid, action):
     if not session.get("authenticated"):
@@ -1677,22 +1755,18 @@ def action_route(uid, action):
         return jsonify({"success": False, "error": "Ação inválida"}), 400
     
     success, message = actions[action]()
-    
     if success:
-        # Log da ação
-        save_admin_message(uid, f"[⚡ AÇÃO: {action.upper()}] {message}")
-        logger.info(f"⚡ [ADMIN] Ação {action} executada para {uid}: {message}")
+        save_admin_message(uid, f"[⚡ {action.upper()}] {message}")
         
-        # Notifica o usuário em alguns casos
-        if action == "setvip" and TELEGRAM_TOKEN:
+        # Notifica usuário
+        if action == "setvip":
             send_telegram_message(uid, "💖 Seu VIP foi ativado! Agora a gente pode conversar sem limite 😘")
-        elif action in ["bonus5", "bonus10"] and TELEGRAM_TOKEN:
-            amount = 5 if action == "bonus5" else 10
-            send_telegram_message(uid, f"🎁 Você ganhou +{amount} mensagens extras! Aproveita 💕")
+        elif action in ["bonus5", "bonus10"]:
+            amt = 5 if action == "bonus5" else 10
+            send_telegram_message(uid, f"🎁 Você ganhou +{amt} mensagens extras! Aproveita 💕")
         
         return jsonify({"success": True, "message": message})
-    else:
-        return jsonify({"success": False, "error": message}), 500
+    return jsonify({"success": False, "error": message}), 500
 
 @app.route("/logout")
 def logout():
@@ -1701,18 +1775,8 @@ def logout():
 
 @app.route("/health")
 def health():
-    redis_ok = check_redis()
-    telegram_ok = bool(TELEGRAM_TOKEN)
-    return jsonify({
-        "status": "healthy" if redis_ok else "degraded",
-        "redis": "connected" if redis_ok else "disconnected",
-        "telegram": "configured" if telegram_ok else "missing",
-        "timestamp": datetime.now().isoformat(),
-        "total_users": len(get_all_users()) if redis_ok else 0
-    })
+    return jsonify({"status": "ok", "redis": check_redis()})
 
 if __name__ == "__main__":
-    logger.info(f"🚀 Sophia Admin Panel v3.0 - Porta {PORT}")
-    logger.info(f"📡 Telegram Token: {'✅ Configurado' if TELEGRAM_TOKEN else '❌ Não configurado'}")
-    logger.info(f"💬 Chat integrado: {'Habilitado' if TELEGRAM_TOKEN else 'Desabilitado'}")
+    logger.info(f"🚀 Sophia Admin v4.0 - Porta {PORT}")
     app.run(host="0.0.0.0", port=PORT, debug=False)

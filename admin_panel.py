@@ -88,6 +88,134 @@ def send_telegram_message(chat_id, text):
     except Exception as e:
         return False, str(e)
 
+def send_telegram_photo(chat_id, photo_data, caption=""):
+    """Envia foto via API do Telegram usando multipart/form-data"""
+    if not TELEGRAM_TOKEN:
+        return False, "Token não configurado"
+    
+    import uuid
+    boundary = str(uuid.uuid4())
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    
+    try:
+        # Construir multipart/form-data manualmente
+        body = b''
+        
+        # Campo chat_id
+        body += f'--{boundary}\r\n'.encode()
+        body += b'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+        body += f'{chat_id}\r\n'.encode()
+        
+        # Campo caption (se houver)
+        if caption:
+            body += f'--{boundary}\r\n'.encode()
+            body += b'Content-Disposition: form-data; name="caption"\r\n\r\n'
+            body += f'{caption}\r\n'.encode()
+        
+        # Campo photo (arquivo)
+        body += f'--{boundary}\r\n'.encode()
+        body += b'Content-Disposition: form-data; name="photo"; filename="photo.jpg"\r\n'
+        body += b'Content-Type: image/jpeg\r\n\r\n'
+        body += photo_data
+        body += b'\r\n'
+        
+        # Finalizar
+        body += f'--{boundary}--\r\n'.encode()
+        
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                'Content-Type': f'multipart/form-data; boundary={boundary}',
+                'Content-Length': len(body)
+            },
+            method='POST'
+        )
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            if result.get("ok"):
+                return True, "Foto enviada"
+            else:
+                return False, result.get("description", "Erro desconhecido")
+                
+    except urllib.error.HTTPError as e:
+        try:
+            error_body = json.loads(e.read().decode('utf-8'))
+            return False, error_body.get("description", str(e))
+        except:
+            return False, str(e)
+    except Exception as e:
+        return False, str(e)
+
+# ================= AÇÕES ADMIN =================
+def activate_vip(uid, days=15):
+    """Ativa VIP para usuário"""
+    try:
+        vip_until = datetime.now() + timedelta(days=days)
+        redis_client.set(f"vip:{uid}", vip_until.isoformat())
+        # Limpa flags relacionadas
+        redis_client.delete(f"pix_pending:{uid}")
+        redis_client.delete(f"pix_clicked:{uid}")
+        redis_client.delete(f"pix_interest:{uid}")
+        redis_client.delete(f"flash_discount:{uid}")
+        return True, f"VIP ativo até {vip_until.strftime('%d/%m/%Y')}"
+    except Exception as e:
+        return False, str(e)
+
+def reset_daily_limit(uid):
+    """Reseta limite diário do usuário"""
+    try:
+        from datetime import date
+        redis_client.delete(f"count:{uid}:{date.today()}")
+        return True, "Limite resetado"
+    except Exception as e:
+        return False, str(e)
+
+def give_bonus_messages(uid, amount=5):
+    """Dá mensagens bônus ao usuário"""
+    try:
+        current = int(redis_client.get(f"bonus:{uid}") or 0)
+        redis_client.set(f"bonus:{uid}", current + amount)
+        redis_client.expire(f"bonus:{uid}", 86400 * 7)
+        return True, f"+{amount} msgs bônus (total: {current + amount})"
+    except Exception as e:
+        return False, str(e)
+
+def clear_user_memory(uid):
+    """Limpa memória de conversa do usuário"""
+    try:
+        redis_client.delete(f"memory:{uid}")
+        return True, "Memória limpa"
+    except Exception as e:
+        return False, str(e)
+
+def unpause_user(uid):
+    """Despausa gatilhos para o usuário"""
+    try:
+        redis_client.delete(f"paused:{uid}")
+        redis_client.delete(f"ignored:{uid}")
+        return True, "Gatilhos reativados"
+    except Exception as e:
+        return False, str(e)
+
+def blacklist_user(uid):
+    """Adiciona usuário à blacklist"""
+    try:
+        redis_client.sadd("blacklist", str(uid))
+        return True, "Usuário bloqueado"
+    except Exception as e:
+        return False, str(e)
+
+def unblacklist_user(uid):
+    """Remove usuário da blacklist"""
+    try:
+        redis_client.srem("blacklist", str(uid))
+        return True, "Usuário desbloqueado"
+    except Exception as e:
+        return False, str(e)
+
 def save_admin_message(uid, text):
     """Salva mensagem do admin no log (formato compatível com o bot)"""
     try:
@@ -449,6 +577,164 @@ body {
 @keyframes slideUp {
     from { transform: translateY(20px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
+}
+
+/* ===== ATALHOS E AÇÕES ===== */
+.shortcuts-panel {
+    background: white;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+.shortcuts-title {
+    font-weight: bold;
+    color: #667eea;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+.shortcuts-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.shortcut-btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.shortcut-btn:hover {
+    transform: scale(1.05);
+}
+.shortcut-msg {
+    background: #e3f2fd;
+    color: #1565c0;
+}
+.shortcut-msg:hover {
+    background: #bbdefb;
+}
+.shortcut-action {
+    background: #f3e5f5;
+    color: #7b1fa2;
+}
+.shortcut-action:hover {
+    background: #e1bee7;
+}
+.shortcut-vip {
+    background: linear-gradient(135deg, #ffd700, #ffb300);
+    color: #333;
+}
+.shortcut-vip:hover {
+    box-shadow: 0 3px 10px rgba(255, 215, 0, 0.4);
+}
+.shortcut-danger {
+    background: #ffebee;
+    color: #c62828;
+}
+.shortcut-danger:hover {
+    background: #ffcdd2;
+}
+.shortcut-success {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+.shortcut-success:hover {
+    background: #c8e6c9;
+}
+
+/* ===== MENSAGENS PRÉ-DEFINIDAS ===== */
+.preset-messages {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 10px;
+    display: none;
+}
+.preset-messages.active {
+    display: block;
+}
+.preset-msg {
+    padding: 8px 12px;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.preset-msg:hover {
+    background: #667eea;
+    color: white;
+    border-color: #667eea;
+}
+
+/* ===== UPLOAD DE FOTO ===== */
+.photo-upload-area {
+    border: 2px dashed #ccc;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    margin-top: 10px;
+    display: none;
+    transition: all 0.3s;
+}
+.photo-upload-area.active {
+    display: block;
+}
+.photo-upload-area.dragover {
+    border-color: #667eea;
+    background: #f0f4ff;
+}
+.photo-preview {
+    max-width: 200px;
+    max-height: 150px;
+    border-radius: 8px;
+    margin: 10px auto;
+    display: none;
+}
+.photo-preview.active {
+    display: block;
+}
+.upload-btn {
+    background: #667eea;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 10px;
+}
+.upload-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ===== TABS ===== */
+.chat-tabs {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 10px;
+}
+.chat-tab {
+    padding: 8px 16px;
+    background: #f0f0f0;
+    border: none;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.chat-tab.active {
+    background: white;
+    color: #667eea;
+    font-weight: bold;
 }
 </style>
 """
@@ -1007,6 +1293,49 @@ def chat_view(uid):
             
             {token_warning}
             
+            <!-- PAINEL DE ATALHOS -->
+            <div class="shortcuts-panel">
+                <div class="shortcuts-title">⚡ Ações Rápidas</div>
+                <div class="shortcuts-grid">
+                    <button class="shortcut-btn shortcut-vip" onclick="executeAction('setvip')">👑 Ativar VIP (15 dias)</button>
+                    <button class="shortcut-btn shortcut-success" onclick="executeAction('bonus5')">🎁 +5 Msgs Bônus</button>
+                    <button class="shortcut-btn shortcut-success" onclick="executeAction('bonus10')">🎁 +10 Msgs Bônus</button>
+                    <button class="shortcut-btn shortcut-action" onclick="executeAction('reset')">🔄 Resetar Limite</button>
+                    <button class="shortcut-btn shortcut-action" onclick="executeAction('clearmemory')">🧠 Limpar Memória</button>
+                    <button class="shortcut-btn shortcut-action" onclick="executeAction('unpause')">▶️ Despausar Gatilhos</button>
+                    <button class="shortcut-btn shortcut-danger" onclick="executeAction('blacklist')">🚫 Bloquear</button>
+                    <button class="shortcut-btn shortcut-success" onclick="executeAction('unblacklist')">✅ Desbloquear</button>
+                </div>
+                
+                <div class="shortcuts-title" style="margin-top: 15px;">💬 Mensagens Rápidas</div>
+                <div class="shortcuts-grid">
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Oi amor! 💕')">👋 Oi amor</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Tudo bem com você? 🥰')">❓ Tudo bem?</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Senti sua falta... 🥺')">😢 Senti falta</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Bom dia! ☀️ Como você dormiu?')">🌅 Bom dia</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Boa noite amor! 🌙 Durma bem 💕')">🌙 Boa noite</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Te adoro! 💖')">💖 Te adoro</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Vem conversar comigo? 😘')">💬 Vem conversar</button>
+                    <button class="shortcut-btn shortcut-msg" onclick="setMessage('Tô com saudade de você... 🥺💕')">💭 Saudade</button>
+                    <button class="shortcut-btn shortcut-vip" onclick="setMessage('💖 Seu VIP foi ativado! Agora a gente pode conversar sem limite 😘')">👑 VIP Ativado</button>
+                    <button class="shortcut-btn shortcut-vip" onclick="setMessage('🎁 Te dei mensagens extras de presente! Aproveita pra gente conversar mais 💕')">🎁 Bônus dado</button>
+                </div>
+                
+                <div class="shortcuts-title" style="margin-top: 15px;">📸 Enviar Mídia</div>
+                <div class="shortcuts-grid">
+                    <button class="shortcut-btn shortcut-action" onclick="togglePhotoUpload()">📷 Enviar Foto</button>
+                </div>
+                
+                <!-- Área de upload de foto -->
+                <div class="photo-upload-area" id="photoUploadArea">
+                    <input type="file" id="photoInput" accept="image/*" style="display: none;" onchange="previewPhoto(event)">
+                    <p>📷 Arraste uma foto aqui ou <a href="#" onclick="document.getElementById('photoInput').click(); return false;">clique para selecionar</a></p>
+                    <img id="photoPreview" class="photo-preview">
+                    <input type="text" id="photoCaption" placeholder="Legenda (opcional)" style="width: 100%; padding: 8px; margin-top: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                    <button class="upload-btn" id="sendPhotoBtn" onclick="sendPhoto()" disabled>📤 Enviar Foto</button>
+                </div>
+            </div>
+            
             <div class="legend">
                 <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #667eea, #764ba2);"></div> Usuário</div>
                 <div class="legend-item"><div class="legend-color" style="background: white; border: 1px solid #ccc;"></div> Sophia (auto)</div>
@@ -1055,6 +1384,154 @@ def chat_view(uid):
             const chatDiv = document.getElementById('chat');
             chatDiv.scrollTop = chatDiv.scrollHeight;
             
+            // Definir mensagem no input
+            function setMessage(text) {{
+                document.getElementById('messageInput').value = text;
+                document.getElementById('messageInput').focus();
+            }}
+            
+            // Toggle área de upload de foto
+            function togglePhotoUpload() {{
+                const area = document.getElementById('photoUploadArea');
+                area.classList.toggle('active');
+            }}
+            
+            // Preview da foto
+            let selectedPhoto = null;
+            function previewPhoto(event) {{
+                const file = event.target.files[0];
+                if (file) {{
+                    selectedPhoto = file;
+                    const reader = new FileReader();
+                    reader.onload = function(e) {{
+                        const preview = document.getElementById('photoPreview');
+                        preview.src = e.target.result;
+                        preview.classList.add('active');
+                        document.getElementById('sendPhotoBtn').disabled = false;
+                    }};
+                    reader.readAsDataURL(file);
+                }}
+            }}
+            
+            // Drag and drop para foto
+            const uploadArea = document.getElementById('photoUploadArea');
+            if (uploadArea) {{
+                uploadArea.addEventListener('dragover', (e) => {{
+                    e.preventDefault();
+                    uploadArea.classList.add('dragover');
+                }});
+                uploadArea.addEventListener('dragleave', () => {{
+                    uploadArea.classList.remove('dragover');
+                }});
+                uploadArea.addEventListener('drop', (e) => {{
+                    e.preventDefault();
+                    uploadArea.classList.remove('dragover');
+                    const file = e.dataTransfer.files[0];
+                    if (file && file.type.startsWith('image/')) {{
+                        selectedPhoto = file;
+                        const reader = new FileReader();
+                        reader.onload = function(ev) {{
+                            const preview = document.getElementById('photoPreview');
+                            preview.src = ev.target.result;
+                            preview.classList.add('active');
+                            document.getElementById('sendPhotoBtn').disabled = false;
+                        }};
+                        reader.readAsDataURL(file);
+                    }}
+                }});
+            }}
+            
+            // Enviar foto
+            async function sendPhoto() {{
+                if (!selectedPhoto) return;
+                
+                const btn = document.getElementById('sendPhotoBtn');
+                const caption = document.getElementById('photoCaption').value;
+                btn.disabled = true;
+                btn.textContent = '📤 Enviando...';
+                
+                const formData = new FormData();
+                formData.append('photo', selectedPhoto);
+                formData.append('caption', caption);
+                
+                try {{
+                    const response = await fetch('/send-photo/{uid}', {{
+                        method: 'POST',
+                        body: formData
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        document.getElementById('successToast').textContent = '✅ Foto enviada!';
+                        document.getElementById('successToast').style.display = 'block';
+                        setTimeout(() => {{
+                            document.getElementById('successToast').style.display = 'none';
+                        }}, 2000);
+                        
+                        // Limpar
+                        selectedPhoto = null;
+                        document.getElementById('photoPreview').classList.remove('active');
+                        document.getElementById('photoCaption').value = '';
+                        document.getElementById('photoInput').value = '';
+                        btn.disabled = true;
+                        
+                        setTimeout(() => location.reload(), 1000);
+                    }} else {{
+                        document.getElementById('errorToast').textContent = '❌ ' + (data.error || 'Erro ao enviar');
+                        document.getElementById('errorToast').style.display = 'block';
+                        setTimeout(() => {{
+                            document.getElementById('errorToast').style.display = 'none';
+                        }}, 3000);
+                    }}
+                }} catch (err) {{
+                    document.getElementById('errorToast').textContent = '❌ Erro de conexão';
+                    document.getElementById('errorToast').style.display = 'block';
+                    setTimeout(() => {{
+                        document.getElementById('errorToast').style.display = 'none';
+                    }}, 3000);
+                }} finally {{
+                    btn.textContent = '📤 Enviar Foto';
+                    btn.disabled = !selectedPhoto;
+                }}
+            }}
+            
+            // Executar ação admin
+            async function executeAction(action) {{
+                if (action === 'blacklist' && !confirm('⚠️ Tem certeza que quer BLOQUEAR este usuário?')) {{
+                    return;
+                }}
+                
+                try {{
+                    const response = await fetch('/action/{uid}/' + action, {{
+                        method: 'POST'
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        document.getElementById('successToast').textContent = '✅ ' + data.message;
+                        document.getElementById('successToast').style.display = 'block';
+                        setTimeout(() => {{
+                            document.getElementById('successToast').style.display = 'none';
+                            location.reload();
+                        }}, 1500);
+                    }} else {{
+                        document.getElementById('errorToast').textContent = '❌ ' + (data.error || 'Erro');
+                        document.getElementById('errorToast').style.display = 'block';
+                        setTimeout(() => {{
+                            document.getElementById('errorToast').style.display = 'none';
+                        }}, 3000);
+                    }}
+                }} catch (err) {{
+                    document.getElementById('errorToast').textContent = '❌ Erro de conexão';
+                    document.getElementById('errorToast').style.display = 'block';
+                    setTimeout(() => {{
+                        document.getElementById('errorToast').style.display = 'none';
+                    }}, 3000);
+                }}
+            }}
+            
             // Envio de mensagem
             async function sendMessage(e) {{
                 e.preventDefault();
@@ -1082,6 +1559,7 @@ def chat_view(uid):
                     
                     if (data.success) {{
                         // Mostra toast de sucesso
+                        document.getElementById('successToast').textContent = '✅ Mensagem enviada!';
                         document.getElementById('successToast').style.display = 'block';
                         setTimeout(() => {{
                             document.getElementById('successToast').style.display = 'none';
@@ -1143,6 +1621,78 @@ def send_message_route(uid):
     else:
         logger.error(f"❌ Erro ao enviar para {uid}: {error}")
         return jsonify({"success": False, "error": error}), 500
+
+# ================= API DE ENVIO DE FOTO =================
+@app.route("/send-photo/<uid>", methods=["POST"])
+def send_photo_route(uid):
+    if not session.get("authenticated"):
+        return jsonify({"success": False, "error": "Não autorizado"}), 401
+    
+    if not TELEGRAM_TOKEN:
+        return jsonify({"success": False, "error": "Token do Telegram não configurado"}), 400
+    
+    if 'photo' not in request.files:
+        return jsonify({"success": False, "error": "Nenhuma foto enviada"}), 400
+    
+    photo = request.files['photo']
+    caption = request.form.get("caption", "").strip()
+    
+    if photo.filename == '':
+        return jsonify({"success": False, "error": "Arquivo inválido"}), 400
+    
+    # Lê os dados da foto
+    photo_data = photo.read()
+    
+    # Envia via Telegram
+    success, error = send_telegram_photo(uid, photo_data, caption)
+    
+    if success:
+        # Salva no log
+        log_text = f"[📷 FOTO ENVIADA]{' - ' + caption if caption else ''}"
+        save_admin_message(uid, log_text)
+        logger.info(f"📷 [ADMIN] Foto enviada para {uid}")
+        return jsonify({"success": True})
+    else:
+        logger.error(f"❌ Erro ao enviar foto para {uid}: {error}")
+        return jsonify({"success": False, "error": error}), 500
+
+# ================= API DE AÇÕES ADMIN =================
+@app.route("/action/<uid>/<action>", methods=["POST"])
+def action_route(uid, action):
+    if not session.get("authenticated"):
+        return jsonify({"success": False, "error": "Não autorizado"}), 401
+    
+    actions = {
+        "setvip": lambda: activate_vip(uid),
+        "bonus5": lambda: give_bonus_messages(uid, 5),
+        "bonus10": lambda: give_bonus_messages(uid, 10),
+        "reset": lambda: reset_daily_limit(uid),
+        "clearmemory": lambda: clear_user_memory(uid),
+        "unpause": lambda: unpause_user(uid),
+        "blacklist": lambda: blacklist_user(uid),
+        "unblacklist": lambda: unblacklist_user(uid),
+    }
+    
+    if action not in actions:
+        return jsonify({"success": False, "error": "Ação inválida"}), 400
+    
+    success, message = actions[action]()
+    
+    if success:
+        # Log da ação
+        save_admin_message(uid, f"[⚡ AÇÃO: {action.upper()}] {message}")
+        logger.info(f"⚡ [ADMIN] Ação {action} executada para {uid}: {message}")
+        
+        # Notifica o usuário em alguns casos
+        if action == "setvip" and TELEGRAM_TOKEN:
+            send_telegram_message(uid, "💖 Seu VIP foi ativado! Agora a gente pode conversar sem limite 😘")
+        elif action in ["bonus5", "bonus10"] and TELEGRAM_TOKEN:
+            amount = 5 if action == "bonus5" else 10
+            send_telegram_message(uid, f"🎁 Você ganhou +{amount} mensagens extras! Aproveita 💕")
+        
+        return jsonify({"success": True, "message": message})
+    else:
+        return jsonify({"success": False, "error": message}), 500
 
 @app.route("/logout")
 def logout():

@@ -11,7 +11,9 @@ NOVIDADES v3:
 import os
 import json
 import redis
-import requests
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import datetime, timedelta
 from flask import Flask, request, redirect, session, jsonify
 import logging
@@ -50,23 +52,39 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 
 # ================= TELEGRAM API =================
 def send_telegram_message(chat_id, text):
-    """Envia mensagem via API do Telegram"""
+    """Envia mensagem via API do Telegram (usando urllib nativo)"""
     if not TELEGRAM_TOKEN:
         return False, "Token não configurado"
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
     try:
-        resp = requests.post(url, json={
+        data = json.dumps({
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "Markdown"
-        }, timeout=10)
+        }).encode('utf-8')
         
-        if resp.status_code == 200:
-            return True, "Enviado"
-        else:
-            error = resp.json().get("description", "Erro desconhecido")
-            return False, error
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            if result.get("ok"):
+                return True, "Enviado"
+            else:
+                return False, result.get("description", "Erro desconhecido")
+                
+    except urllib.error.HTTPError as e:
+        try:
+            error_body = json.loads(e.read().decode('utf-8'))
+            return False, error_body.get("description", str(e))
+        except:
+            return False, str(e)
     except Exception as e:
         return False, str(e)
 

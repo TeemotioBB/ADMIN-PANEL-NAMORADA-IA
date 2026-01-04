@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-🎯 Sophia Admin Panel v2 - Conversas em Tempo Real (CORRIGIDO)
-Visualize TODAS as conversas, ações e eventos dos usuários
-CORREÇÕES: Auto-refresh inteligente, filtros corretos, status online preciso
+🎯 Sophia Admin Panel v3 - Chat em Tempo Real
+NOVIDADES v3:
+- Chat integrado: envie mensagens diretamente pelo painel
+- Marcação [ADMIN] para diferenciar de mensagens automáticas
+- Campo de input com envio em tempo real
+- Indicador de digitação
 """
 
 import os
 import json
 import redis
+import requests
 from datetime import datetime, timedelta
 from flask import Flask, request, redirect, session, jsonify
 import logging
@@ -16,15 +20,16 @@ import html
 
 # ================= CONFIG =================
 REDIS_URL = os.environ.get("REDIS_URL", "redis://default:DcddfJOHLXZdFPjEhRjHeodNgdtrsevl@shuttle.proxy.rlwy.net:12241")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")  # Mesmo token do bot
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 SECRET_KEY = os.environ.get("SECRET_KEY", "sophia-secret-" + str(int(time.time())))
 PORT = int(os.environ.get("PORT", 8081))
 
-# NOVOS PARÂMETROS
-ONLINE_THRESHOLD = 20  # minutos para considerar online
-IDLE_THRESHOLD = 40    # minutos para considerar idle (ausente)
-OFFLINE_THRESHOLD = 60 # minutos para considerar offline
-RECENT_THRESHOLD = 24  # horas para filtro "recentes"
+# PARÂMETROS DE STATUS
+ONLINE_THRESHOLD = 20
+IDLE_THRESHOLD = 40
+OFFLINE_THRESHOLD = 60
+RECENT_THRESHOLD = 24
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,25 +48,51 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 
-# ================= STYLES (MELHORADO) =================
+# ================= TELEGRAM API =================
+def send_telegram_message(chat_id, text):
+    """Envia mensagem via API do Telegram"""
+    if not TELEGRAM_TOKEN:
+        return False, "Token não configurado"
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        resp = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        }, timeout=10)
+        
+        if resp.status_code == 200:
+            return True, "Enviado"
+        else:
+            error = resp.json().get("description", "Erro desconhecido")
+            return False, error
+    except Exception as e:
+        return False, str(e)
+
+def save_admin_message(uid, text):
+    """Salva mensagem do admin no log (formato compatível com o bot)"""
+    try:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        # Marca como ADMIN para diferenciar das mensagens automáticas da Sophia
+        redis_client.rpush(f"chatlog:{uid}", f"[{timestamp}] ADMIN: {text[:100]}")
+        redis_client.ltrim(f"chatlog:{uid}", -200, -1)
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao salvar mensagem: {e}")
+        return False
+
+# ================= STYLES =================
 STYLES = """
 <style>
-* { 
-    margin: 0; 
-    padding: 0; 
-    box-sizing: border-box; 
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 body { 
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: #333; 
     min-height: 100vh;
 }
-.container { 
-    max-width: 1400px; 
-    margin: 0 auto; 
-    padding: 20px; 
-}
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
 .header { 
     background: rgba(255,255,255,0.95); 
     color: #667eea; 
@@ -83,16 +114,8 @@ body {
     box-shadow: 0 5px 15px rgba(0,0,0,0.1);
     text-align: center;
 }
-.stat-number {
-    font-size: 32px;
-    font-weight: bold;
-    color: #667eea;
-}
-.stat-label {
-    color: #666;
-    font-size: 14px;
-    margin-top: 5px;
-}
+.stat-number { font-size: 32px; font-weight: bold; color: #667eea; }
+.stat-label { color: #666; font-size: 14px; margin-top: 5px; }
 .user-list { 
     display: grid; 
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
@@ -109,26 +132,11 @@ body {
     border-left: 4px solid #667eea;
     position: relative;
 }
-.user-card:hover { 
-    transform: translateY(-5px); 
-    box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-}
-.user-card.online {
-    border-left-color: #10b981;
-}
-.user-card.idle {
-    border-left-color: #f59e0b;
-}
-.user-card.offline {
-    border-left-color: #ef4444;
-}
-.user-id {
-    font-weight: bold;
-    color: #667eea;
-    font-size: 16px;
-    margin-bottom: 10px;
-    word-break: break-all;
-}
+.user-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+.user-card.online { border-left-color: #10b981; }
+.user-card.idle { border-left-color: #f59e0b; }
+.user-card.offline { border-left-color: #ef4444; }
+.user-id { font-weight: bold; color: #667eea; font-size: 16px; margin-bottom: 10px; word-break: break-all; }
 .user-stats {
     display: flex;
     justify-content: space-between;
@@ -147,41 +155,17 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.status { 
-    display: inline-block; 
-    padding: 4px 12px; 
-    border-radius: 20px; 
-    font-size: 11px; 
-    font-weight: bold; 
-    text-transform: uppercase;
-}
+.status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
 .status-online { background: #10b981; color: white; }
 .status-offline { background: #ef4444; color: white; }
 .status-idle { background: #f59e0b; color: white; }
-.badge-vip {
-    background: gold;
-    color: #333;
-    padding: 3px 8px;
-    border-radius: 12px;
-    font-size: 10px;
-    font-weight: bold;
-    margin-left: 5px;
-}
-.badge-locked {
-    background: #ef4444;
-    color: white;
-    padding: 3px 8px;
-    border-radius: 12px;
-    font-size: 10px;
-    font-weight: bold;
-    margin-left: 5px;
-}
+.badge-vip { background: gold; color: #333; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; margin-left: 5px; }
+.badge-locked { background: #ef4444; color: white; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; margin-left: 5px; }
 .chat-view {
     background: white;
     border-radius: 15px;
-    padding: 0;
     box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-    height: calc(100vh - 200px);
+    height: calc(100vh - 280px);
     display: flex;
     flex-direction: column;
 }
@@ -221,6 +205,21 @@ body {
     color: #333; 
     border: 1px solid #e0e0e0;
     border-bottom-left-radius: 4px; 
+}
+.message-admin {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: white;
+    border-bottom-left-radius: 4px;
+    position: relative;
+}
+.message-admin::before {
+    content: "👑 ADMIN";
+    position: absolute;
+    top: -18px;
+    left: 0;
+    font-size: 10px;
+    color: #d97706;
+    font-weight: bold;
 }
 .message-action {
     background: #e3f2fd;
@@ -272,17 +271,8 @@ body {
     max-width: 90%;
     border-radius: 8px;
 }
-.message-sender { 
-    font-weight: bold; 
-    margin-bottom: 5px; 
-    font-size: 12px;
-    opacity: 0.9;
-}
-.message-time { 
-    font-size: 10px; 
-    opacity: 0.7; 
-    margin-top: 5px; 
-}
+.message-sender { font-weight: bold; margin-bottom: 5px; font-size: 12px; opacity: 0.9; }
+.message-time { font-size: 10px; opacity: 0.7; margin-top: 5px; }
 .btn { 
     display: inline-block; 
     padding: 12px 24px; 
@@ -295,30 +285,12 @@ body {
     font-weight: 500;
     transition: all 0.3s;
 }
-.btn:hover { 
-    background: #5a67d8; 
-    transform: translateY(-2px);
-}
+.btn:hover { background: #5a67d8; transform: translateY(-2px); }
 .btn-secondary { background: #6c757d; }
 .btn-secondary:hover { background: #5a6268; }
-.search-box { 
-    width: 100%; 
-    padding: 12px 20px; 
-    border: 2px solid #e0e0e0; 
-    border-radius: 10px; 
-    margin-bottom: 20px;
-    font-size: 14px;
-}
-.search-box:focus {
-    outline: none;
-    border-color: #667eea;
-}
-.login-container {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-}
+.btn-warning { background: #f59e0b; }
+.btn-warning:hover { background: #d97706; }
+.login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
 .login-card {
     background: white;
     padding: 40px;
@@ -327,30 +299,17 @@ body {
     width: 100%;
     max-width: 400px;
 }
-.form-group {
-    margin-bottom: 20px;
-}
-.form-group label {
-    display: block;
-    margin-bottom: 8px;
-    font-weight: 600;
-}
-.form-group input {
+.form-group { margin-bottom: 20px; }
+.form-group label { display: block; margin-bottom: 8px; font-weight: 600; }
+.form-group input, .form-group textarea {
     width: 100%;
     padding: 12px;
     border: 2px solid #e0e0e0;
     border-radius: 8px;
     font-size: 14px;
 }
-.form-group input:focus {
-    outline: none;
-    border-color: #667eea;
-}
-.empty-state {
-    text-align: center;
-    padding: 60px 20px;
-    color: #666;
-}
+.form-group input:focus, .form-group textarea:focus { outline: none; border-color: #667eea; }
+.empty-state { text-align: center; padding: 60px 20px; color: #666; }
 .legend {
     background: white;
     padding: 15px;
@@ -362,71 +321,9 @@ body {
     justify-content: center;
     font-size: 12px;
 }
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-.legend-color {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-}
-.auto-refresh-control {
-    background: white;
-    padding: 15px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 15px;
-}
-.toggle-switch {
-    position: relative;
-    display: inline-block;
-    width: 50px;
-    height: 24px;
-}
-.toggle-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-.slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: #ccc;
-    transition: .4s;
-    border-radius: 24px;
-}
-.slider:before {
-    position: absolute;
-    content: "";
-    height: 18px;
-    width: 18px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
-}
-input:checked + .slider {
-    background-color: #667eea;
-}
-input:checked + .slider:before {
-    transform: translateX(26px);
-}
-.pagination {
-    display: flex;
-    justify-content: center;
-    gap: 10px;
-    margin: 20px 0;
-}
+.legend-item { display: flex; align-items: center; gap: 5px; }
+.legend-color { width: 16px; height: 16px; border-radius: 4px; }
+.pagination { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
 .pagination a {
     padding: 8px 16px;
     background: white;
@@ -435,18 +332,110 @@ input:checked + .slider:before {
     color: #667eea;
     transition: all 0.3s;
 }
-.pagination a:hover {
-    background: #667eea;
-    color: white;
+.pagination a:hover, .pagination a.active { background: #667eea; color: white; }
+
+/* ===== CHAT INPUT ===== */
+.chat-input-container {
+    padding: 15px 20px;
+    border-top: 2px solid #f0f0f0;
+    background: white;
+    border-radius: 0 0 15px 15px;
 }
-.pagination a.active {
-    background: #667eea;
+.chat-input-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+.chat-input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 2px solid #e0e0e0;
+    border-radius: 25px;
+    font-size: 14px;
+    transition: all 0.3s;
+}
+.chat-input:focus {
+    outline: none;
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+}
+.chat-send-btn {
+    padding: 12px 24px;
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     color: white;
+    border: none;
+    border-radius: 25px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.chat-send-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 5px 15px rgba(245, 158, 11, 0.4);
+}
+.chat-send-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+.sending-indicator {
+    display: none;
+    color: #f59e0b;
+    font-size: 12px;
+    margin-top: 8px;
+}
+.sending-indicator.active {
+    display: block;
+    animation: pulse 1s infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+.token-warning {
+    background: #fff3cd;
+    color: #856404;
+    padding: 10px 15px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    font-size: 13px;
+}
+.success-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: #10b981;
+    color: white;
+    padding: 15px 25px;
+    border-radius: 10px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+    display: none;
+    z-index: 1000;
+    animation: slideUp 0.3s ease-out;
+}
+.error-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: #ef4444;
+    color: white;
+    padding: 15px 25px;
+    border-radius: 10px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+    display: none;
+    z-index: 1000;
+}
+@keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
 }
 </style>
 """
 
-# ================= UTILITIES (CORRIGIDO) =================
+# ================= UTILITIES =================
 def check_redis():
     if not redis_client:
         return False
@@ -457,7 +446,6 @@ def check_redis():
         return False
 
 def get_all_users():
-    """Retorna lista de usuários únicos com timestamp"""
     if not check_redis():
         return []
     users = {}
@@ -488,7 +476,6 @@ def get_user_messages(uid):
     return messages
 
 def parse_chat_message(log_line):
-    """Parseia linha: [HH:MM:SS] ROLE: message"""
     try:
         if log_line.startswith('['):
             end_bracket = log_line.find(']')
@@ -501,10 +488,10 @@ def parse_chat_message(log_line):
                     role = remaining[:colon_pos].strip().lower()
                     text = remaining[colon_pos+1:].strip()
                     
-                    # Mapeia roles para tipos visuais
                     role_map = {
                         "user": "user",
                         "sophia": "assistant",
+                        "admin": "admin",  # NOVO: role admin
                         "system": "system",
                         "action": "action",
                         "info": "info",
@@ -512,7 +499,6 @@ def parse_chat_message(log_line):
                         "blocked": "blocked",
                     }
                     
-                    # Tenta converter timestamp para datetime
                     try:
                         now = datetime.now()
                         parts = timestamp_str.split(':')
@@ -520,7 +506,6 @@ def parse_chat_message(log_line):
                             msg_time = datetime(now.year, now.month, now.day, 
                                               int(parts[0]), int(parts[1]), 
                                               int(parts[2]) if len(parts) > 2 else 0)
-                            # Se a hora for no futuro (passou da meia-noite), assume dia anterior
                             if msg_time > now:
                                 msg_time -= timedelta(days=1)
                         else:
@@ -540,11 +525,11 @@ def parse_chat_message(log_line):
     return None
 
 def get_user_stats(uid):
-    """Calcula estatísticas precisas do usuário"""
     stats = {
         "total_messages": 0,
         "user_messages": 0,
         "sophia_messages": 0,
+        "admin_messages": 0,
         "actions": 0,
         "last_activity": None,
         "last_message_preview": None,
@@ -553,7 +538,6 @@ def get_user_stats(uid):
         "is_locked": False
     }
     
-    # Verifica VIP
     try:
         vip_until = redis_client.get(f"vip:{uid}")
         if vip_until:
@@ -561,7 +545,6 @@ def get_user_stats(uid):
     except:
         pass
     
-    # Verifica se está travado
     try:
         from datetime import date
         count = int(redis_client.get(f"count:{uid}:{date.today()}") or 0)
@@ -581,19 +564,18 @@ def get_user_stats(uid):
             last_user_msg = msg.get("text", "")
         elif role == "assistant":
             stats["sophia_messages"] += 1
+        elif role == "admin":
+            stats["admin_messages"] += 1
         elif role in ["action", "info"]:
             stats["actions"] += 1
         
-        # Atualiza última atividade APENAS com mensagens do usuário
         if role == "user" and msg.get("datetime"):
             if not stats["last_activity"] or msg["datetime"] > stats["last_activity"]:
                 stats["last_activity"] = msg["datetime"]
     
-    # Preview da última mensagem
     if last_user_msg:
         stats["last_message_preview"] = last_user_msg[:50] + "..." if len(last_user_msg) > 50 else last_user_msg
     
-    # Calcula status PRECISO baseado na última atividade
     if stats["last_activity"]:
         diff = datetime.now() - stats["last_activity"]
         minutes_diff = diff.total_seconds() / 60
@@ -602,8 +584,6 @@ def get_user_stats(uid):
             stats["status"] = "online"
         elif minutes_diff < IDLE_THRESHOLD:
             stats["status"] = "idle"
-        elif minutes_diff < OFFLINE_THRESHOLD:
-            stats["status"] = "offline"
         else:
             stats["status"] = "offline"
     
@@ -632,7 +612,6 @@ def get_global_stats():
     }
 
 def format_last_seen(last_activity):
-    """Formata timestamp de última atividade"""
     if not last_activity:
         return "Nunca"
     
@@ -646,8 +625,7 @@ def format_last_seen(last_activity):
     elif seconds < 86400:
         return f"{int(seconds/3600)}h"
     elif seconds < 604800:
-        dias = int(seconds/86400)
-        return f"{dias}d"
+        return f"{int(seconds/86400)}d"
     else:
         return last_activity.strftime("%d/%m")
 
@@ -681,7 +659,7 @@ def login():
             <div class="login-card">
                 <div style="text-align: center; margin-bottom: 30px;">
                     <h1 style="color: #667eea;"><i class="fas fa-robot"></i> Sophia AI</h1>
-                    <p style="color: #666;">Painel de Monitoramento v2.1</p>
+                    <p style="color: #666;">Painel de Monitoramento v3.0</p>
                 </div>
                 {f'<div style="background: #fee; color: #c33; padding: 10px; border-radius: 5px; margin-bottom: 20px;">{error}</div>' if error else ''}
                 <form method="post">
@@ -714,13 +692,11 @@ def dashboard():
     all_users = get_all_users()
     stats = get_global_stats()
     
-    # Calcula stats de todos os usuários primeiro
     users_with_stats = []
     for uid in all_users:
         s = get_user_stats(uid)
         users_with_stats.append((uid, s))
     
-    # Aplica filtros
     filtered = []
     for uid, s in users_with_stats:
         if filter_type == 'vip' and not s['is_vip']:
@@ -741,11 +717,10 @@ def dashboard():
         
         filtered.append((uid, s))
     
-    # Ordena por última atividade (mais recente primeiro)
     filtered.sort(key=lambda x: x[1]['last_activity'] or datetime.min, reverse=True)
     
     total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
-    page = min(page, total_pages)  # Garante que a página não exceda o total
+    page = min(page, total_pages)
     page_users = filtered[(page-1)*per_page : page*per_page]
     
     users_html = ""
@@ -783,12 +758,10 @@ def dashboard():
     if not users_html:
         users_html = f'<div class="empty-state"><h3>😔 Nenhum usuário {filter_type}</h3><p>Tente outro filtro</p></div>'
     
-    # Paginação
     pagination_html = '<div class="pagination">'
     if page > 1:
         pagination_html += f'<a href="/dashboard?filter={filter_type}&page={page-1}"><i class="fas fa-chevron-left"></i></a>'
     
-    # Mostra 5 páginas ao redor da atual
     start_page = max(1, page - 2)
     end_page = min(total_pages, page + 2)
     
@@ -800,13 +773,15 @@ def dashboard():
         pagination_html += f'<a href="/dashboard?filter={filter_type}&page={page+1}"><i class="fas fa-chevron-right"></i></a>'
     pagination_html += '</div>'
     
+    token_status = "✅ Configurado" if TELEGRAM_TOKEN else "❌ Não configurado"
+    
     return f"""
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Dashboard - Sophia Admin</title>
+        <title>Dashboard - Sophia Admin v3</title>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         {STYLES}
     </head>
@@ -815,8 +790,11 @@ def dashboard():
             <div class="header">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <h1><i class="fas fa-chart-line"></i> Dashboard Sophia AI v2.1</h1>
-                        <p style="margin-top: 5px; opacity: 0.8;">Monitoramento em Tempo Real • {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+                        <h1><i class="fas fa-chart-line"></i> Dashboard Sophia AI v3.0</h1>
+                        <p style="margin-top: 5px; opacity: 0.8;">
+                            Monitoramento + Chat em Tempo Real • {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+                            <br><small>📡 Telegram: {token_status}</small>
+                        </p>
                     </div>
                     <a href="/logout" class="btn btn-secondary"><i class="fas fa-sign-out-alt"></i> Sair</a>
                 </div>
@@ -878,7 +856,7 @@ def dashboard():
             
             <div style="text-align: center; margin-top: 20px;">
                 <button class="btn" onclick="location.reload()">
-                    <i class="fas fa-sync-alt"></i> Atualizar Manualmente
+                    <i class="fas fa-sync-alt"></i> Atualizar
                 </button>
             </div>
         </div>
@@ -894,7 +872,6 @@ def chat_view(uid):
     messages = get_user_messages(uid)
     stats = get_user_stats(uid)
     
-    # Gerar HTML das mensagens
     messages_html = ""
     for msg in messages:
         role = msg.get("role", "system")
@@ -912,7 +889,14 @@ def chat_view(uid):
         elif role == "assistant":
             messages_html += f"""
             <div class="message message-sophia">
-                <div class="message-sender">🤖 SOPHIA</div>
+                <div class="message-sender">🤖 SOPHIA (auto)</div>
+                <div>{text}</div>
+                <div class="message-time">{time_str}</div>
+            </div>
+            """
+        elif role == "admin":
+            messages_html += f"""
+            <div class="message message-admin">
                 <div>{text}</div>
                 <div class="message-time">{time_str}</div>
             </div>
@@ -954,7 +938,7 @@ def chat_view(uid):
             """
     
     if not messages_html:
-        messages_html = '<div class="empty-state"><h3>📭 Nenhuma mensagem ainda</h3><p>Este usuário ainda não interagiu com a Sophia</p></div>'
+        messages_html = '<div class="empty-state"><h3>📭 Nenhuma mensagem ainda</h3></div>'
     
     vip_badge = '👑 VIP' if stats['is_vip'] else '💬 FREE'
     locked_badge = '🔒 TRAVADO' if stats['is_locked'] else '✅ ATIVO'
@@ -962,6 +946,10 @@ def chat_view(uid):
     status_text = {"online": "ONLINE", "idle": "AUSENTE", "offline": "OFFLINE"}.get(stats['status'], "OFFLINE")
     
     last_seen = format_last_seen(stats['last_activity'])
+    
+    token_warning = ""
+    if not TELEGRAM_TOKEN:
+        token_warning = '<div class="token-warning">⚠️ TELEGRAM_TOKEN não configurado. O envio de mensagens está desabilitado.</div>'
     
     return f"""
     <!DOCTYPE html>
@@ -984,7 +972,7 @@ def chat_view(uid):
                             <span>📊 {stats['total_messages']} mensagens</span>
                             <span>👤 {stats['user_messages']} do usuário</span>
                             <span>🤖 {stats['sophia_messages']} da Sophia</span>
-                            <span>⚡ {stats['actions']} ações</span>
+                            <span>👑 {stats['admin_messages']} do admin</span>
                             <span>🕐 Visto: {last_seen}</span>
                         </div>
                         <div style="margin-top: 8px;">
@@ -999,44 +987,144 @@ def chat_view(uid):
                 </div>
             </div>
             
+            {token_warning}
+            
             <div class="legend">
                 <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #667eea, #764ba2);"></div> Usuário</div>
-                <div class="legend-item"><div class="legend-color" style="background: white; border: 1px solid #ccc;"></div> Sophia</div>
-                <div class="legend-item"><div class="legend-color" style="background: #e3f2fd;"></div> Ações (cliques, comandos)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #f3e5f5;"></div> Informações</div>
-                <div class="legend-item"><div class="legend-color" style="background: #ffebee;"></div> Erros</div>
-                <div class="legend-item"><div class="legend-color" style="background: #fff3e0;"></div> Bloqueios</div>
-                <div class="legend-item"><div class="legend-color" style="background: #fff3cd;"></div> Sistema</div>
-            </div>
-            
-            <div style="background: white; border-radius: 10px; padding: 15px; margin-bottom: 15px; text-align: center;">
-                <span style="color: #666; font-size: 13px;">
-                    <i class="fas fa-info-circle"></i> Atualização automática em 30 segundos • Use o botão "Atualizar" para refresh manual
-                </span>
+                <div class="legend-item"><div class="legend-color" style="background: white; border: 1px solid #ccc;"></div> Sophia (auto)</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #f59e0b, #d97706);"></div> Admin (você)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #e3f2fd;"></div> Ações</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f3e5f5;"></div> Info</div>
             </div>
             
             <div class="chat-view">
                 <div class="chat-header">
                     <div>
-                        <strong>ID Completo:</strong>
+                        <strong>ID:</strong>
                         <code style="font-size: 11px; background: #f0f0f0; padding: 4px 8px; border-radius: 4px;">{uid}</code>
                     </div>
                     <span style="font-size: 12px; color: #666;">{datetime.now().strftime('%H:%M:%S')}</span>
                 </div>
                 <div class="chat-messages" id="chat">{messages_html}</div>
+                
+                <!-- INPUT DE CHAT -->
+                <div class="chat-input-container">
+                    <form class="chat-input-form" id="chatForm" onsubmit="sendMessage(event)">
+                        <input 
+                            type="text" 
+                            class="chat-input" 
+                            id="messageInput" 
+                            placeholder="Digite como Sophia (será marcado como [ADMIN])..."
+                            autocomplete="off"
+                            {'disabled' if not TELEGRAM_TOKEN else ''}
+                        >
+                        <button type="submit" class="chat-send-btn" id="sendBtn" {'disabled' if not TELEGRAM_TOKEN else ''}>
+                            <i class="fas fa-paper-plane"></i> Enviar
+                        </button>
+                    </form>
+                    <div class="sending-indicator" id="sendingIndicator">
+                        <i class="fas fa-spinner fa-spin"></i> Enviando...
+                    </div>
+                </div>
             </div>
         </div>
+        
+        <div class="success-toast" id="successToast">✅ Mensagem enviada!</div>
+        <div class="error-toast" id="errorToast">❌ Erro ao enviar</div>
+        
         <script>
             // Scroll para o final
             const chatDiv = document.getElementById('chat');
             chatDiv.scrollTop = chatDiv.scrollHeight;
             
-            // Auto-refresh a cada 30 segundos (reduzido de 10s)
+            // Envio de mensagem
+            async function sendMessage(e) {{
+                e.preventDefault();
+                
+                const input = document.getElementById('messageInput');
+                const btn = document.getElementById('sendBtn');
+                const indicator = document.getElementById('sendingIndicator');
+                const message = input.value.trim();
+                
+                if (!message) return;
+                
+                // Desabilita
+                input.disabled = true;
+                btn.disabled = true;
+                indicator.classList.add('active');
+                
+                try {{
+                    const response = await fetch('/send/{uid}', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+                        body: 'message=' + encodeURIComponent(message)
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {{
+                        // Mostra toast de sucesso
+                        document.getElementById('successToast').style.display = 'block';
+                        setTimeout(() => {{
+                            document.getElementById('successToast').style.display = 'none';
+                        }}, 2000);
+                        
+                        // Limpa input
+                        input.value = '';
+                        
+                        // Recarrega após 1s para mostrar a mensagem
+                        setTimeout(() => location.reload(), 1000);
+                    }} else {{
+                        document.getElementById('errorToast').textContent = '❌ ' + (data.error || 'Erro ao enviar');
+                        document.getElementById('errorToast').style.display = 'block';
+                        setTimeout(() => {{
+                            document.getElementById('errorToast').style.display = 'none';
+                        }}, 3000);
+                    }}
+                }} catch (err) {{
+                    document.getElementById('errorToast').style.display = 'block';
+                    setTimeout(() => {{
+                        document.getElementById('errorToast').style.display = 'none';
+                    }}, 3000);
+                }} finally {{
+                    input.disabled = false;
+                    btn.disabled = false;
+                    indicator.classList.remove('active');
+                    input.focus();
+                }}
+            }}
+            
+            // Auto-refresh a cada 30 segundos
             setTimeout(() => location.reload(), 30000);
         </script>
     </body>
     </html>
     """
+
+# ================= API DE ENVIO =================
+@app.route("/send/<uid>", methods=["POST"])
+def send_message_route(uid):
+    if not session.get("authenticated"):
+        return jsonify({"success": False, "error": "Não autorizado"}), 401
+    
+    if not TELEGRAM_TOKEN:
+        return jsonify({"success": False, "error": "Token do Telegram não configurado"}), 400
+    
+    message = request.form.get("message", "").strip()
+    if not message:
+        return jsonify({"success": False, "error": "Mensagem vazia"}), 400
+    
+    # Envia via Telegram
+    success, error = send_telegram_message(uid, message)
+    
+    if success:
+        # Salva no log como ADMIN
+        save_admin_message(uid, message)
+        logger.info(f"📤 [ADMIN] Mensagem enviada para {uid}: {message[:50]}...")
+        return jsonify({"success": True})
+    else:
+        logger.error(f"❌ Erro ao enviar para {uid}: {error}")
+        return jsonify({"success": False, "error": error}), 500
 
 @app.route("/logout")
 def logout():
@@ -1046,18 +1134,17 @@ def logout():
 @app.route("/health")
 def health():
     redis_ok = check_redis()
+    telegram_ok = bool(TELEGRAM_TOKEN)
     return jsonify({
         "status": "healthy" if redis_ok else "degraded",
         "redis": "connected" if redis_ok else "disconnected",
+        "telegram": "configured" if telegram_ok else "missing",
         "timestamp": datetime.now().isoformat(),
         "total_users": len(get_all_users()) if redis_ok else 0
     })
 
 if __name__ == "__main__":
-    logger.info(f"🚀 Sophia Admin Panel v2.1 - Porta {PORT}")
-    logger.info(f"⚙️  Configurações de Status:")
-    logger.info(f"   🟢 Online: < {ONLINE_THRESHOLD} minutos")
-    logger.info(f"   🟡 Ausente: {ONLINE_THRESHOLD}-{IDLE_THRESHOLD} minutos")
-    logger.info(f"   🔴 Offline: > {OFFLINE_THRESHOLD} minutos")
-    logger.info(f"   📅 Recentes: < {RECENT_THRESHOLD} horas")
+    logger.info(f"🚀 Sophia Admin Panel v3.0 - Porta {PORT}")
+    logger.info(f"📡 Telegram Token: {'✅ Configurado' if TELEGRAM_TOKEN else '❌ Não configurado'}")
+    logger.info(f"💬 Chat integrado: {'Habilitado' if TELEGRAM_TOKEN else 'Desabilitado'}")
     app.run(host="0.0.0.0", port=PORT, debug=False)

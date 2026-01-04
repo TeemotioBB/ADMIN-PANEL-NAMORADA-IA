@@ -22,7 +22,7 @@ import html
 
 # ================= CONFIG =================
 REDIS_URL = os.environ.get("REDIS_URL", "redis://default:DcddfJOHLXZdFPjEhRjHeodNgdtrsevl@shuttle.proxy.rlwy.net:12241")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")  # Mesmo token do bot
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8528168785:AAFfgtaB0vEagd1cdfZ3hWDyL9PKFZrmRjk")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 SECRET_KEY = os.environ.get("SECRET_KEY", "sophia-secret-" + str(int(time.time())))
 PORT = int(os.environ.get("PORT", 8081))

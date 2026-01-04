@@ -21,9 +21,10 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "sophia-secret-" + str(int(time.time()
 PORT = int(os.environ.get("PORT", 8081))
 
 # NOVOS PARÂMETROS
-ONLINE_THRESHOLD = 5  # minutos para considerar online
-IDLE_THRESHOLD = 30   # minutos para considerar idle
-RECENT_THRESHOLD = 24 # horas para filtro "recentes"
+ONLINE_THRESHOLD = 20  # minutos para considerar online
+IDLE_THRESHOLD = 40    # minutos para considerar idle (ausente)
+OFFLINE_THRESHOLD = 60 # minutos para considerar offline
+RECENT_THRESHOLD = 24  # horas para filtro "recentes"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -601,6 +602,8 @@ def get_user_stats(uid):
             stats["status"] = "online"
         elif minutes_diff < IDLE_THRESHOLD:
             stats["status"] = "idle"
+        elif minutes_diff < OFFLINE_THRESHOLD:
+            stats["status"] = "offline"
         else:
             stats["status"] = "offline"
     
@@ -1052,8 +1055,9 @@ def health():
 
 if __name__ == "__main__":
     logger.info(f"🚀 Sophia Admin Panel v2.1 - Porta {PORT}")
-    logger.info(f"⚙️  Configurações:")
-    logger.info(f"   • Online: < {ONLINE_THRESHOLD} minutos")
-    logger.info(f"   • Ausente: < {IDLE_THRESHOLD} minutos")
-    logger.info(f"   • Recentes: < {RECENT_THRESHOLD} horas")
+    logger.info(f"⚙️  Configurações de Status:")
+    logger.info(f"   🟢 Online: < {ONLINE_THRESHOLD} minutos")
+    logger.info(f"   🟡 Ausente: {ONLINE_THRESHOLD}-{IDLE_THRESHOLD} minutos")
+    logger.info(f"   🔴 Offline: > {OFFLINE_THRESHOLD} minutos")
+    logger.info(f"   📅 Recentes: < {RECENT_THRESHOLD} horas")
     app.run(host="0.0.0.0", port=PORT, debug=False)

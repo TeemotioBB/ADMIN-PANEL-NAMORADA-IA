@@ -573,12 +573,17 @@ def get_user_messages(uid):
     if not check_redis():
         return []
     messages = []
+    seen = set()
     try:
         logs = redis_client.lrange(f"chatlog:{uid}", 0, -1)
         for log in logs:
             msg = parse_chat_message(log)
             if msg:
-                messages.append(msg)
+                # Cria chave única para detectar duplicatas
+                msg_key = f"{msg['role']}:{msg['time']}:{msg['text']}"
+                if msg_key not in seen:
+                    seen.add(msg_key)
+                    messages.append(msg)
     except:
         pass
     return messages

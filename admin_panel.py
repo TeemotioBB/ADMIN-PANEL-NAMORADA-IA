@@ -67,6 +67,7 @@ def admin_alerts_key(): return "admin:alerts"
 def daily_stats_key(d): return f"stats:daily:{d}"
 def pix_pending_list_key(): return "admin:pix_pending"
 def broadcast_history_key(): return "admin:broadcast_history"
+def admin_takeover_key(uid): return f"admin:takeover:{uid}"    
 
 # ================= TELEGRAM API =================
 def send_telegram_message(chat_id, text, parse_mode="Markdown"):
@@ -468,6 +469,63 @@ def get_broadcast_history():
         return [json.loads(h) for h in history]
     except:
         return []
+
+# ================= TAKEOVER SYSTEM =================
+def start_takeover(uid):
+    """Admin assume controle da conversa"""
+    try:
+        # Salva estado atual de pausa/trava para restaurar depois
+        current_paused = redis_client.get(f"paused:{uid}")
+        current_ignored = redis_client.get(f"ignored:{uid}")
+        
+        redis_client.hset(admin_takeover_key(uid), mapping={
+            "active": "1",
+            "started_at": datetime.now().isoformat(),
+            "prev_paused": current_paused or "",
+            "prev_ignored": current_ignored or ""
+        })
+        
+        # Pausa a IA
+        redis_client.set(f"paused:{uid}", "admin_takeover")
+        
+        log_admin_action("TAKEOVER_START", "Admin assumiu controle", uid)
+        return True
+    except Exception as e:
+        return False
+
+def end_takeover(uid):
+    """Admin libera controle da conversa"""
+    try:
+        takeover_data = redis_client.hgetall(admin_takeover_key(uid))
+        
+        # Restaura estado anterior
+        prev_paused = takeover_data.get("prev_paused", "")
+        prev_ignored = takeover_data.get("prev_ignored", "")
+        
+        if prev_paused:
+            redis_client.set(f"paused:{uid}", prev_paused)
+        else:
+            redis_client.delete(f"paused:{uid}")
+            
+        if prev_ignored:
+            redis_client.set(f"ignored:{uid}", prev_ignored)
+        else:
+            redis_client.delete(f"ignored:{uid}")
+        
+        # Remove takeover
+        redis_client.delete(admin_takeover_key(uid))
+        
+        log_admin_action("TAKEOVER_END", "Admin liberou controle", uid)
+        return True
+    except Exception as e:
+        return False
+
+def is_takeover_active(uid):
+    """Verifica se admin está no controle"""
+    try:
+        return redis_client.hget(admin_takeover_key(uid), "active") == "1"
+    except:
+        return False
 
 # ================= AÇÕES ADMIN =================
 def save_admin_message(uid, text):
@@ -2482,6 +2540,7 @@ def chat_view(uid):
     is_fav = is_favorite(uid)
     notes = get_user_notes(uid)
     tags = get_user_tags(uid)
+    is_takeover = is_takeover_active(uid)
     
     messages_html = ""
     for msg in messages:
@@ -2532,6 +2591,10 @@ def chat_view(uid):
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px;">
+                    <div style="cursor:pointer; font-size: 20px; {'background:#ff6b6b;padding:5px;border-radius:8px;' if is_takeover else ''}" 
+                         onclick="toggleTakeover()" title="{'Liberar Conversa' if is_takeover else 'Assumir Conversa'}">
+                        {'🎮' if is_takeover else '🕹️'}
+                    </div>
                     <div style="cursor:pointer; font-size: 20px;" onclick="toggleFavorite()">
                         {'⭐' if is_fav else '☆'}
                     </div>
@@ -2540,7 +2603,8 @@ def chat_view(uid):
                     </div>
                 </div>
             </div>
-            
+
+          {'<div style="background:linear-gradient(135deg,#ff6b6b,#ee5a5a);color:white;padding:12px 20px;text-align:center;font-weight:600;">🎮 VOCÊ ESTÁ NO CONTROLE - IA pausada</div>' if is_takeover else ''}  
             <div class="chat-messages" id="chatMessages">
                 {messages_html}
             </div>
@@ -2770,6 +2834,17 @@ def chat_view(uid):
                     showToast('❌ Erro', 'error');
                 }}
             }}
+
+            async function toggleTakeover() {{
+                const resp = await fetch('/api/takeover/{uid}', {{ method: 'POST' }});
+                const data = await resp.json();
+                if (data.success) {{
+                    showToast(data.active ? '🎮 Controle assumido! IA pausada.' : '✅ Controle liberado! IA reativada.', 'success');
+                    setTimeout(() => location.reload(), 800);
+                }} else {{
+                    showToast('❌ Erro', 'error');
+                }}
+            }}
             
             async function toggleFavorite() {{
                 const resp = await fetch('/api/favorite/{uid}', {{ method: 'POST' }});
@@ -2962,6 +3037,18 @@ def read_all_alerts():
     
     mark_all_alerts_read()
     return jsonify({"success": True})
+
+@app.route("/api/takeover/<uid>", methods=["POST"])
+def takeover_route(uid):
+    if not session.get("authenticated"):
+        return jsonify({"success": False}), 401
+    
+    if is_takeover_active(uid):
+        end_takeover(uid)
+        return jsonify({"success": True, "active": False})
+    else:
+        start_takeover(uid)
+        return jsonify({"success": True, "active": True})
 
 @app.route("/health")
 def health():

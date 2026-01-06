@@ -1682,6 +1682,9 @@ def render_sidebar(active_page):
             <a href="/logs" class="menu-item {'active' if active_page == 'logs' else ''}">
                 <span class="icon">📝</span> Logs
             </a>
+            <a href="/exportar-txt" class="menu-item">
+                <span class="icon">📥</span> Exportar Conversas
+            </a>
             <a href="/config" class="menu-item {'active' if active_page == 'config' else ''}">
                 <span class="icon">⚙️</span> Configurações
             </a>
@@ -3053,6 +3056,119 @@ def takeover_route(uid):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "redis": check_redis(), "version": "5.0"})
+
+# ================= EXPORTAR CONVERSAS =================
+@app.route("/exportar-conversas")
+def exportar_conversas():
+    if not session.get("authenticated"):
+        return redirect("/login")
+    
+    all_users = get_all_users()
+    export_data = []
+    
+    for uid in all_users:
+        stats = get_user_stats(uid)
+        messages = get_user_messages(uid)
+        
+        user_msgs = [m for m in messages if m['role'] == 'user']
+        sophia_msgs = [m for m in messages if m['role'] == 'assistant']
+        
+        user_data = {
+            "uid": uid,
+            "is_vip": stats['is_vip'],
+            "total_msgs": len(messages),
+            "user_msgs": len(user_msgs),
+            "sophia_msgs": len(sophia_msgs),
+            "status": stats['status'],
+            "is_locked": stats['is_locked'],
+            "conversa": []
+        }
+        
+        for msg in messages:
+            user_data["conversa"].append({
+                "role": msg['role'],
+                "text": msg['text'],
+                "time": msg['time']
+            })
+        
+        export_data.append(user_data)
+    
+    export_data.sort(key=lambda x: x['total_msgs'], reverse=True)
+    
+    response = app.response_class(
+        response=json.dumps(export_data, ensure_ascii=False, indent=2),
+        status=200,
+        mimetype='application/json'
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=conversas_sophia.json"
+    return response
+
+
+@app.route("/exportar-txt")
+def exportar_txt():
+    if not session.get("authenticated"):
+        return redirect("/login")
+    
+    all_users = get_all_users()
+    output = []
+    
+    output.append("=" * 60)
+    output.append("RELATORIO DE CONVERSAS - SOPHIA BOT")
+    output.append(f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    output.append(f"Total de usuarios: {len(all_users)}")
+    output.append("=" * 60)
+    output.append("")
+    
+    for uid in all_users:
+        stats = get_user_stats(uid)
+        messages = get_user_messages(uid)
+        
+        if not messages:
+            continue
+        
+        user_msgs = len([m for m in messages if m['role'] == 'user'])
+        
+        output.append("-" * 60)
+        output.append(f"USUARIO: {uid}")
+        output.append(f"VIP: {'Sim' if stats['is_vip'] else 'Nao'}")
+        output.append(f"Msgs do usuario: {user_msgs}")
+        output.append(f"Total msgs: {len(messages)}")
+        output.append(f"Travado: {'Sim' if stats['is_locked'] else 'Nao'}")
+        output.append("-" * 60)
+        output.append("")
+        
+        for msg in messages:
+            role_label = {
+                'user': 'USER',
+                'assistant': 'SOPHIA', 
+                'admin': 'ADMIN',
+                'system': 'SISTEMA',
+                'action': 'ACAO',
+                'info': 'INFO'
+            }.get(msg['role'], msg['role'].upper())
+            
+            output.append(f"[{msg['time']}] {role_label}:")
+            output.append(f"   {msg['text']}")
+            output.append("")
+        
+        output.append("")
+    
+    vips = sum(1 for uid in all_users if get_user_stats(uid)['is_vip'])
+    output.append("=" * 60)
+    output.append("RESUMO")
+    output.append(f"Total usuarios: {len(all_users)}")
+    output.append(f"VIPs: {vips}")
+    output.append(f"Conversao: {(vips/len(all_users)*100) if all_users else 0:.1f}%")
+    output.append("=" * 60)
+    
+    response = app.response_class(
+        response="\n".join(output),
+        status=200,
+        mimetype='text/plain; charset=utf-8'
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=conversas_sophia.txt"
+    return response
+
 
 if __name__ == "__main__":
     logger.info(f"🚀 Sophia Admin v5.0 FULL - Porta {PORT}")

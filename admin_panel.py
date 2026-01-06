@@ -131,23 +131,6 @@ def send_telegram_photo(chat_id, photo_data, caption=""):
     except Exception as e:
         return False, str(e)
 
-def send_telegram_message_with_button(chat_id, text):
-    """Envia mensagem com botão de pagamento PIX"""
-    if not TELEGRAM_TOKEN:
-        return False, "Token não configurado"
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
-    try:
-        # Criar botão inline
-        keyboard = {
-            "inline_keyboard": [[
-                {
-                    "text": "💳 PAGAR COM PIX",
-                    "callback_data": "pix_payment"
-                }
-            ]]
-        }
         
         data = json.dumps({
             "chat_id": chat_id,
@@ -584,18 +567,49 @@ def get_message_hash(message):
 def mark_broadcast_sent_to_locked(uid, message_hash):
     """Marca que usuário travado recebeu broadcast desta mensagem"""
     try:
-        redis_client.set(broadcast_locked_sent_key(uid), message_hash, ex=86400*30)  # 30 dias
+        key = broadcast_locked_sent_key(uid)
+        redis_client.set(key, message_hash, ex=86400*30)  # 30 dias
+        logger.info(f"✅ REDIS SET: {key} = {message_hash}")
         return True
-    except:
+    except Exception as e:
+        logger.error(f"❌ Erro ao marcar: {e}")
         return False
 
 def has_received_broadcast_while_locked(uid, message_hash):
     """Verifica se usuário já recebeu este broadcast enquanto travado"""
     try:
-        last_hash = redis_client.get(broadcast_locked_sent_key(uid))
-        return last_hash == message_hash
-    except:
+        key = broadcast_locked_sent_key(uid)
+        last_hash = redis_client.get(key)
+        result = last_hash == message_hash
+        logger.info(f"🔍 REDIS GET: {key} = '{last_hash}' | Comparando com '{message_hash}' | Igual? {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar: {e}")
         return False
+```
+
+---
+
+## **RESUMO RÁPIDO:**
+
+✅ **1.** Apague a primeira função `send_telegram_message_with_button` (duplicata)
+✅ **2.** Mude `R$ 4,99` para `R$ 9,99` na segunda função (2 lugares)
+✅ **3.** Substitua as 2 funções de Redis pelos códigos com log acima
+
+---
+
+## **DEPOIS DE FAZER ISSO:**
+
+1. Salve o arquivo
+2. Reinicie o admin
+3. Envie um broadcast para travados
+4. Olhe os logs no terminal/console
+
+Você deve ver linhas como:
+```
+✅ REDIS SET: broadcast:locked_sent:1293602874 = abc123def
+🔍 REDIS GET: broadcast:locked_sent:1293602874 = 'abc123def' | Comparando com 'abc123def' | Igual? True
+⏭️ 1293602874 já recebeu este broadcast enquanto travado - pulando
 
 def clear_broadcast_lock_memory(uid):
     """Limpa memória de broadcast quando usuário sai do travamento"""

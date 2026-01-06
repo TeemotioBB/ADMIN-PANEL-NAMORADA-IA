@@ -177,7 +177,7 @@ def send_telegram_message_with_button(chat_id, text):
         keyboard = {
             "inline_keyboard": [[
                 {
-                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                    "text": "💳 PAGAR COM PIX (R$ 4,99)",
                     "callback_data": "pay_pix"
                 }
             ]]
@@ -213,7 +213,7 @@ def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
         keyboard = {
             "inline_keyboard": [[
                 {
-                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                    "text": "💳 PAGAR COM PIX (R$ 4,99)",
                     "callback_data": "pay_pix"
                 }
             ]]
@@ -2175,8 +2175,9 @@ def broadcast():
         filter_free = request.form.get("filter_free") == "on"
         filter_active = request.form.get("filter_active") == "on"
         filter_locked = request.form.get("filter_locked") == "on"
+        add_pix_button = request.form.get("add_pix_button") == "on"
         
-        # NOVO: Pegar foto do broadcast
+        # Pegar foto do broadcast
         photo_file = request.files.get("photo")
         photo_data = None
         if photo_file and photo_file.filename:
@@ -2188,7 +2189,9 @@ def broadcast():
             failed = 0
             skipped = 0
             
-            message_hash = get_message_hash((message or "") + str(bool(photo_data))) if filter_locked else None
+            # Gera hash único baseado em: mensagem + se tem foto + se tem botão
+            message_content = f"{message or 'no_text'}_{bool(photo_data)}_{add_pix_button}"
+            message_hash = get_message_hash(message_content) if filter_locked else None
             
             for uid in all_users:
                 stats = get_user_stats(uid)
@@ -2205,33 +2208,37 @@ def broadcast():
                     if hours > 72:
                         continue
                 
+                # Filtro especial para APENAS TRAVADOS
                 if filter_locked:
+                    # Só envia se estiver travado
                     if not stats["is_locked"]:
                         continue
-                    if has_received_broadcast_while_locked(uid, message_hash):
+                    
+                    # Verifica se já recebeu esta mensagem enquanto travado
+                    if message_hash and has_received_broadcast_while_locked(uid, message_hash):
                         skipped += 1
+                        logger.info(f"⏭️ {uid} já recebeu este broadcast enquanto travado - pulando")
                         continue
                 
-                # NOVO: Enviar foto ou texto COM BOTÃO PIX
-                add_pix_button = request.form.get("add_pix_button") == "on"
-                
-                if add_pix_button:
-                    # Enviar com botão PIX
-                    if photo_data:
+                # Enviar foto ou texto COM ou SEM botão
+                success = False
+                if photo_data:
+                    if add_pix_button:
                         success, _ = send_telegram_photo_with_button(uid, photo_data, message)
                     else:
-                        success, _ = send_telegram_message_with_button(uid, message)
-                else:
-                    # Enviar sem botão
-                    if photo_data:
                         success, _ = send_telegram_photo(uid, photo_data, message)
+                else:
+                    if add_pix_button:
+                        success, _ = send_telegram_message_with_button(uid, message)
                     else:
                         success, _ = send_telegram_message(uid, message)
                 
                 if success:
                     sent += 1
-                    if filter_locked:
+                    # Marca que recebeu se for broadcast de travados
+                    if filter_locked and message_hash:
                         mark_broadcast_sent_to_locked(uid, message_hash)
+                        logger.info(f"✅ {uid} recebeu e foi marcado com hash: {message_hash}")
                 else:
                     failed += 1
             
@@ -2241,8 +2248,12 @@ def broadcast():
             if filter_free: filters.append("FREE")
             if filter_active: filters.append("Ativos 72h")
             if filter_locked: filters.append("Travados")
+            if add_pix_button: filters.append("Com botão PIX")
             
             msg_preview = "[📷 FOTO]" if photo_data else message
+            if add_pix_button:
+                msg_preview += " [💳 BOTÃO]"
+            
             save_broadcast_history(msg_preview, ", ".join(filters) or "Todos", sent, failed)
             log_admin_action("BROADCAST", f"Enviado para {sent} usuários" + (f" ({skipped} ignorados)" if filter_locked and skipped > 0 else ""))
             
@@ -2250,7 +2261,8 @@ def broadcast():
             <div class="card" style="background: linear-gradient(135deg, var(--success), #059669); color: white;">
                 <h3>✅ Broadcast Enviado!</h3>
                 <p style="margin-top: 10px;">📤 Enviados: {sent} | ❌ Falhas: {failed}</p>
-                {f'<p style="margin-top: 5px;">⏭️ Ignorados (já receberam): {skipped}</p>' if filter_locked and skipped > 0 else ''}
+                {f'<p style="margin-top: 5px;">⏭️ Ignorados (já receberam enquanto travados): {skipped}</p>' if filter_locked and skipped > 0 else ''}
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.9;">🔒 Hash da mensagem: {message_hash or 'N/A'}</p>
             </div>
             """
     
@@ -2272,7 +2284,7 @@ def broadcast():
     all_users = get_all_users()
     locked_count = sum(1 for uid in all_users if get_user_stats(uid)["is_locked"])
     
-    # NOVO: Buscar fotos da galeria
+    # Galeria
     photos = get_gallery()
     gallery_html = ""
     for p in photos[:12]:
@@ -2289,14 +2301,13 @@ def broadcast():
         <div class="card">
             <div class="card-title">📢 Enviar Broadcast</div>
             <form method="post" enctype="multipart/form-data" id="broadcastForm">
-                <!-- NOVO: Preview de foto -->
+                <!-- Preview de foto -->
                 <div class="photo-preview-container" id="photoPreview" style="margin-bottom: 15px;">
                     <img id="previewImg" class="photo-preview-img">
                     <span id="photoName"></span>
                     <button type="button" class="photo-preview-remove" onclick="removePhoto()">✕</button>
                 </div>
                 
-                <!-- NOVO: Campo de foto -->
                 <div class="form-group">
                     <label class="form-label">📷 Foto (opcional)</label>
                     <div style="display: flex; gap: 10px;">
@@ -2311,21 +2322,20 @@ def broadcast():
                     <label class="form-label">Mensagem (legenda se tiver foto)</label>
                     <textarea name="message" class="form-input form-textarea" placeholder="Digite a mensagem..."></textarea>
                 </div>
-
-
-
+                
                 <div class="form-group">
                     <label class="form-label">💳 Pagamento</label>
                     <label class="filter-option" style="background: rgba(16, 185, 129, 0.1); border-left: 3px solid var(--success);">
                         <input type="checkbox" name="add_pix_button" checked> 
                         <div>
-                            <strong>💳 Adicionar botão "PAGAR COM PIX"</strong>
+                            <strong>💳 Adicionar botão "PAGAR COM PIX (R$ 9,99)"</strong>
                             <div style="font-size: 12px; color: #888; margin-top: 3px;">
                                 Adiciona botão interativo embaixo da mensagem
                             </div>
                         </div>
                     </label>
                 </div>
+                
                 <div class="form-group">
                     <label class="form-label">Filtros</label>
                     <label class="filter-option">
@@ -2374,20 +2384,21 @@ def broadcast():
         </div>
         
         <div class="card" style="background: rgba(102, 126, 234, 0.1); border-left: 4px solid var(--primary);">
-            <div class="card-title">ℹ️ Como funciona</div>
+            <div class="card-title">ℹ️ Como funciona o Sistema Inteligente</div>
             <ul style="font-size: 14px; line-height: 1.8; color: #666;">
-                <li>📷 <strong>Nova!</strong> Envie foto com ou sem legenda</li>
+                <li>📷 Envie foto com ou sem legenda</li>
                 <li>🖼️ Use fotos da galeria ou faça upload direto</li>
-                <li>✅ Envia apenas para usuários que atingiram o limite diário (travados)</li>
-                <li>🔄 Sistema inteligente: não envia a mesma mensagem repetida durante o travamento</li>
-                <li>♻️ Se o usuário sair do travamento e voltar, ele pode receber a mensagem novamente</li>
-                <li>⏰ Memória de envio: mantida por 30 dias após o envio</li>
+                <li>💳 Adicione botão de pagamento PIX automaticamente</li>
+                <li>✅ <strong>Sistema Anti-Spam:</strong> Cada broadcast tem um "hash" único</li>
+                <li>🔒 Usuários travados só recebem 1x enquanto estiverem travados</li>
+                <li>♻️ Se sair do travamento e voltar, pode receber de novo</li>
+                <li>⏰ Memória de envio: mantida por 30 dias</li>
                 <li>🎯 Perfeito para: ofertas VIP, promoções, lembretes de upgrade</li>
             </ul>
         </div>
     </div>
     
-    <!-- NOVO: Modal da Galeria -->
+    <!-- Modal da Galeria -->
     <div class="modal-overlay" id="galleryModal" onclick="if(event.target===this)closeModal('galleryModal')">
         <div class="modal-content">
             <div class="modal-header">
@@ -2422,12 +2433,10 @@ def broadcast():
         }}
         
         async function selectBroadcastPhoto(photoId, photoName) {{
-            // Buscar foto da galeria
             const resp = await fetch('/api/galeria/get/' + photoId);
             const data = await resp.json();
             
             if (data.success) {{
-                // Criar blob e converter para File
                 const byteCharacters = atob(data.photo);
                 const byteNumbers = new Array(byteCharacters.length);
                 for (let i = 0; i < byteCharacters.length; i++) {{
@@ -2435,20 +2444,13 @@ def broadcast():
                 }}
                 const byteArray = new Uint8Array(byteNumbers);
                 const blob = new Blob([byteArray], {{ type: 'image/jpeg' }});
-                
-                // Criar um objeto File
                 const file = new File([blob], photoName, {{ type: 'image/jpeg' }});
-                
-                // Criar DataTransfer para setar no input
                 const dataTransfer = new DataTransfer();
                 dataTransfer.items.add(file);
                 document.getElementById('photoInput').files = dataTransfer.files;
-                
-                // Mostrar preview
                 document.getElementById('previewImg').src = 'data:image/jpeg;base64,' + data.photo;
                 document.getElementById('photoName').textContent = photoName;
                 document.getElementById('photoPreview').classList.add('active');
-                
                 closeModal('galleryModal');
                 showToast('📷 Foto selecionada: ' + photoName, 'success');
             }}

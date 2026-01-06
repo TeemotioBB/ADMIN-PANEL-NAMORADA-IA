@@ -68,6 +68,8 @@ def daily_stats_key(d): return f"stats:daily:{d}"
 def pix_pending_list_key(): return "admin:pix_pending"
 def broadcast_history_key(): return "admin:broadcast_history"
 def admin_takeover_key(uid): return f"admin:takeover:{uid}"    
+def broadcast_locked_sent_key(uid): return f"broadcast:locked_sent:{uid}"
+def broadcast_locked_hash_key(): return "broadcast:locked_hash"
 
 # ================= TELEGRAM API =================
 def send_telegram_message(chat_id, text, parse_mode="Markdown"):
@@ -470,6 +472,34 @@ def get_broadcast_history():
     except:
         return []
 
+def get_message_hash(message):
+    """Gera hash único da mensagem para controle de envio"""
+    return hashlib.md5(message.encode()).hexdigest()[:12]
+
+def mark_broadcast_sent_to_locked(uid, message_hash):
+    """Marca que usuário travado recebeu broadcast desta mensagem"""
+    try:
+        redis_client.set(broadcast_locked_sent_key(uid), message_hash, ex=86400*30)  # 30 dias
+        return True
+    except:
+        return False
+
+def has_received_broadcast_while_locked(uid, message_hash):
+    """Verifica se usuário já recebeu este broadcast enquanto travado"""
+    try:
+        last_hash = redis_client.get(broadcast_locked_sent_key(uid))
+        return last_hash == message_hash
+    except:
+        return False
+
+def clear_broadcast_lock_memory(uid):
+    """Limpa memória de broadcast quando usuário sai do travamento"""
+    try:
+        redis_client.delete(broadcast_locked_sent_key(uid))
+        return True
+    except:
+        return False
+
 # ================= TAKEOVER SYSTEM =================
 def start_takeover(uid):
     """Admin assume controle da conversa"""
@@ -544,15 +574,19 @@ def activate_vip(uid, days=15):
         for key in ["pix_pending", "pix_clicked", "pix_interest", "flash_discount"]:
             redis_client.delete(f"{key}:{uid}")
         remove_pix_pending(uid)
+        clear_broadcast_lock_memory(uid)
         record_daily_stat("vips_activated")
         log_admin_action("VIP_ACTIVATED", f"{days} dias", uid)
         return True, f"VIP até {vip_until.strftime('%d/%m/%Y')}"
     except Exception as e:
         return False, str(e)
+        
 
 def reset_daily_limit(uid):
     try:
         redis_client.delete(f"count:{uid}:{date.today()}")
+        # Limpa memória de broadcast quando usuário é destravado
+        clear_broadcast_lock_memory(uid)
         log_admin_action("LIMIT_RESET", "", uid)
         return True, "Limite resetado"
     except Exception as e:
@@ -2035,11 +2069,16 @@ def broadcast():
         filter_vip = request.form.get("filter_vip") == "on"
         filter_free = request.form.get("filter_free") == "on"
         filter_active = request.form.get("filter_active") == "on"
+        filter_locked = request.form.get("filter_locked") == "on"  # NOVA LINHA
         
         if message:
             all_users = get_all_users()
             sent = 0
             failed = 0
+            skipped = 0  # NOVA LINHA
+            
+            # Gera hash da mensagem para controle de reenvio para travados
+            message_hash = get_message_hash(message) if filter_locked else None  # NOVA LINHA
             
             for uid in all_users:
                 stats = get_user_stats(uid)
@@ -2053,12 +2092,27 @@ def broadcast():
                     if not stats["last_activity"]:
                         continue
                     hours = (datetime.now() - stats["last_activity"]).total_seconds() / 3600
-                    if hours > 72:  # 3 dias
+                    if hours > 72:
                         continue
+                
+                # BLOCO NOVO - Filtro especial para APENAS TRAVADOS
+                if filter_locked:
+                    # Só envia se estiver travado
+                    if not stats["is_locked"]:
+                        continue
+                    
+                    # Verifica se já recebeu esta mensagem enquanto travado
+                    if has_received_broadcast_while_locked(uid, message_hash):
+                        skipped += 1
+                        continue
+                # FIM DO BLOCO NOVO
                 
                 success, _ = send_telegram_message(uid, message)
                 if success:
                     sent += 1
+                    # NOVA LINHA - Marca que recebeu se for broadcast de travados
+                    if filter_locked:
+                        mark_broadcast_sent_to_locked(uid, message_hash)
                 else:
                     failed += 1
             
@@ -2067,14 +2121,16 @@ def broadcast():
             if filter_vip: filters.append("VIP")
             if filter_free: filters.append("FREE")
             if filter_active: filters.append("Ativos 72h")
+            if filter_locked: filters.append("Travados")  # NOVA LINHA
             
             save_broadcast_history(message, ", ".join(filters) or "Todos", sent, failed)
-            log_admin_action("BROADCAST", f"Enviado para {sent} usuários")
+            log_admin_action("BROADCAST", f"Enviado para {sent} usuários" + (f" ({skipped} ignorados)" if filter_locked and skipped > 0 else ""))  # MODIFICADA
             
             result_html = f"""
             <div class="card" style="background: linear-gradient(135deg, var(--success), #059669); color: white;">
                 <h3>✅ Broadcast Enviado!</h3>
                 <p style="margin-top: 10px;">📤 Enviados: {sent} | ❌ Falhas: {failed}</p>
+                {f'<p style="margin-top: 5px;">⏭️ Ignorados (já receberam): {skipped}</p>' if filter_locked and skipped > 0 else ''}
             </div>
             """
     
@@ -2091,6 +2147,11 @@ def broadcast():
             <td>{h['sent']}</td>
         </tr>
         """
+    
+    # BLOCO NOVO - Contar usuários travados
+    all_users = get_all_users()
+    locked_count = sum(1 for uid in all_users if get_user_stats(uid)["is_locked"])
+    # FIM DO BLOCO NOVO
     
     content = f"""
     <div class="container">
@@ -2115,6 +2176,18 @@ def broadcast():
                     <label class="filter-option">
                         <input type="checkbox" name="filter_active" checked> Ativos (últimas 72h)
                     </label>
+                    
+                    {/* BLOCO NOVO - Checkbox de travados */}
+                    <label class="filter-option" style="background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--danger);">
+                        <input type="checkbox" name="filter_locked"> 
+                        <div>
+                            <strong>🔒 Apenas Travados ({locked_count} usuários)</strong>
+                            <div style="font-size: 12px; color: #888; margin-top: 3px;">
+                                ⚡ Sistema inteligente: não envia repetido para quem já recebeu no mesmo travamento
+                            </div>
+                        </div>
+                    </label>
+                    {/* FIM DO BLOCO NOVO */}
                 </div>
                 
                 <button type="submit" class="btn btn-primary">
@@ -2141,6 +2214,19 @@ def broadcast():
                 </table>
             </div>
         </div>
+        
+        {/* BLOCO NOVO - Card informativo */}
+        <div class="card" style="background: rgba(102, 126, 234, 0.1); border-left: 4px solid var(--primary);">
+            <div class="card-title">ℹ️ Como funciona o Broadcast para Travados</div>
+            <ul style="font-size: 14px; line-height: 1.8; color: #666;">
+                <li>✅ Envia apenas para usuários que atingiram o limite diário (travados)</li>
+                <li>🔄 Sistema inteligente: não envia a mesma mensagem repetida durante o travamento</li>
+                <li>♻️ Se o usuário sair do travamento e voltar, ele pode receber a mensagem novamente</li>
+                <li>⏰ Memória de envio: mantida por 30 dias após o envio</li>
+                <li>🎯 Perfeito para: ofertas VIP, promoções, lembretes de upgrade</li>
+            </ul>
+        </div>
+        {/* FIM DO BLOCO NOVO */}
     </div>
     """
     

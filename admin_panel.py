@@ -165,6 +165,40 @@ def send_telegram_message_with_button(chat_id, text):
     except Exception as e:
         return False, str(e)
 
+def send_telegram_message_with_button(chat_id, text):
+    """Envia mensagem com botão de pagamento PIX"""
+    if not TELEGRAM_TOKEN:
+        return False, "Token não configurado"
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
+    try:
+        # Criar botão inline - callback_data precisa ser "pay_pix" (mesma do bot)
+        keyboard = {
+            "inline_keyboard": [[
+                {
+                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                    "callback_data": "pay_pix"
+                }
+            ]]
+        }
+        
+        data = json.dumps({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "reply_markup": keyboard
+        }).encode('utf-8')
+        
+        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return (True, "Enviado") if result.get("ok") else (False, result.get("description", "Erro"))
+                
+    except Exception as e:
+        return False, str(e)
+
 def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
     """Envia foto com botão de pagamento PIX"""
     if not TELEGRAM_TOKEN:
@@ -175,12 +209,12 @@ def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     
     try:
-        # Criar botão inline
+        # Criar botão inline - callback_data precisa ser "pay_pix" (mesma do bot)
         keyboard = {
             "inline_keyboard": [[
                 {
-                    "text": "💳 PAGAR COM PIX",
-                    "callback_data": "pix_payment"
+                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                    "callback_data": "pay_pix"
                 }
             ]]
         }
@@ -194,6 +228,11 @@ def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
             body += f'--{boundary}\r\n'.encode()
             body += b'Content-Disposition: form-data; name="caption"\r\n\r\n'
             body += f'{caption}\r\n'.encode()
+        
+        # Adicionar parse_mode
+        body += f'--{boundary}\r\n'.encode()
+        body += b'Content-Disposition: form-data; name="parse_mode"\r\n\r\n'
+        body += b'Markdown\r\n'
         
         # Adicionar reply_markup
         body += f'--{boundary}\r\n'.encode()

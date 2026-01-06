@@ -2148,10 +2148,9 @@ def broadcast():
         </tr>
         """
     
-    # BLOCO NOVO - Contar usuários travados
+    Contar usuários travados
     all_users = get_all_users()
     locked_count = sum(1 for uid in all_users if get_user_stats(uid)["is_locked"])
-    # FIM DO BLOCO NOVO
     
     content = f"""
     <div class="container">
@@ -2177,7 +2176,7 @@ def broadcast():
                         <input type="checkbox" name="filter_active" checked> Ativos (últimas 72h)
                     </label>
                     
-                    {/* BLOCO NOVO - Checkbox de travados */}
+                     - Checkbox de travados */}
                     <label class="filter-option" style="background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--danger);">
                         <input type="checkbox" name="filter_locked"> 
                         <div>
@@ -2187,7 +2186,7 @@ def broadcast():
                             </div>
                         </div>
                     </label>
-                    {/* FIM DO BLOCO NOVO */}
+                    
                 </div>
                 
                 <button type="submit" class="btn btn-primary">
@@ -2215,7 +2214,7 @@ def broadcast():
             </div>
         </div>
         
-        {/* BLOCO NOVO - Card informativo */}
+        Card informativo */}
         <div class="card" style="background: rgba(102, 126, 234, 0.1); border-left: 4px solid var(--primary);">
             <div class="card-title">ℹ️ Como funciona o Broadcast para Travados</div>
             <ul style="font-size: 14px; line-height: 1.8; color: #666;">
@@ -2226,7 +2225,6 @@ def broadcast():
                 <li>🎯 Perfeito para: ofertas VIP, promoções, lembretes de upgrade</li>
             </ul>
         </div>
-        {/* FIM DO BLOCO NOVO */}
     </div>
     """
     

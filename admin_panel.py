@@ -2069,16 +2069,21 @@ def broadcast():
         filter_vip = request.form.get("filter_vip") == "on"
         filter_free = request.form.get("filter_free") == "on"
         filter_active = request.form.get("filter_active") == "on"
-        filter_locked = request.form.get("filter_locked") == "on"  # NOVA LINHA
+        filter_locked = request.form.get("filter_locked") == "on"
         
-        if message:
+        # NOVO: Pegar foto do broadcast
+        photo_file = request.files.get("photo")
+        photo_data = None
+        if photo_file and photo_file.filename:
+            photo_data = photo_file.read()
+        
+        if message or photo_data:
             all_users = get_all_users()
             sent = 0
             failed = 0
-            skipped = 0  # NOVA LINHA
+            skipped = 0
             
-            # Gera hash da mensagem para controle de reenvio para travados
-            message_hash = get_message_hash(message) if filter_locked else None  # NOVA LINHA
+            message_hash = get_message_hash((message or "") + str(bool(photo_data))) if filter_locked else None
             
             for uid in all_users:
                 stats = get_user_stats(uid)
@@ -2095,22 +2100,21 @@ def broadcast():
                     if hours > 72:
                         continue
                 
-                # BLOCO NOVO - Filtro especial para APENAS TRAVADOS
                 if filter_locked:
-                    # Só envia se estiver travado
                     if not stats["is_locked"]:
                         continue
-                    
-                    # Verifica se já recebeu esta mensagem enquanto travado
                     if has_received_broadcast_while_locked(uid, message_hash):
                         skipped += 1
                         continue
-                # FIM DO BLOCO NOVO
                 
-                success, _ = send_telegram_message(uid, message)
+                # NOVO: Enviar foto ou texto
+                if photo_data:
+                    success, _ = send_telegram_photo(uid, photo_data, message)
+                else:
+                    success, _ = send_telegram_message(uid, message)
+                
                 if success:
                     sent += 1
-                    # NOVA LINHA - Marca que recebeu se for broadcast de travados
                     if filter_locked:
                         mark_broadcast_sent_to_locked(uid, message_hash)
                 else:
@@ -2121,10 +2125,11 @@ def broadcast():
             if filter_vip: filters.append("VIP")
             if filter_free: filters.append("FREE")
             if filter_active: filters.append("Ativos 72h")
-            if filter_locked: filters.append("Travados")  # NOVA LINHA
+            if filter_locked: filters.append("Travados")
             
-            save_broadcast_history(message, ", ".join(filters) or "Todos", sent, failed)
-            log_admin_action("BROADCAST", f"Enviado para {sent} usuários" + (f" ({skipped} ignorados)" if filter_locked and skipped > 0 else ""))  # MODIFICADA
+            msg_preview = "[📷 FOTO]" if photo_data else message
+            save_broadcast_history(msg_preview, ", ".join(filters) or "Todos", sent, failed)
+            log_admin_action("BROADCAST", f"Enviado para {sent} usuários" + (f" ({skipped} ignorados)" if filter_locked and skipped > 0 else ""))
             
             result_html = f"""
             <div class="card" style="background: linear-gradient(135deg, var(--success), #059669); color: white;">
@@ -2152,16 +2157,44 @@ def broadcast():
     all_users = get_all_users()
     locked_count = sum(1 for uid in all_users if get_user_stats(uid)["is_locked"])
     
+    # NOVO: Buscar fotos da galeria
+    photos = get_gallery()
+    gallery_html = ""
+    for p in photos[:12]:
+        gallery_html += f"""
+        <div class="gallery-item" onclick="selectBroadcastPhoto('{p['id']}', '{p['name']}')">
+            <img src="data:image/jpeg;base64,{p['thumbnail'][:500]}..." alt="{p['name']}">
+        </div>
+        """
+    
     content = f"""
     <div class="container">
         {result_html}
         
         <div class="card">
             <div class="card-title">📢 Enviar Broadcast</div>
-            <form method="post">
+            <form method="post" enctype="multipart/form-data" id="broadcastForm">
+                <!-- NOVO: Preview de foto -->
+                <div class="photo-preview-container" id="photoPreview" style="margin-bottom: 15px;">
+                    <img id="previewImg" class="photo-preview-img">
+                    <span id="photoName"></span>
+                    <button type="button" class="photo-preview-remove" onclick="removePhoto()">✕</button>
+                </div>
+                
+                <!-- NOVO: Campo de foto -->
                 <div class="form-group">
-                    <label class="form-label">Mensagem</label>
-                    <textarea name="message" class="form-input form-textarea" placeholder="Digite a mensagem..." required></textarea>
+                    <label class="form-label">📷 Foto (opcional)</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="file" name="photo" id="photoInput" accept="image/*" class="form-input" onchange="previewPhoto(event)">
+                        <button type="button" class="btn btn-secondary" onclick="openModal('galleryModal')">
+                            <i class="fas fa-images"></i> Galeria
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Mensagem (legenda se tiver foto)</label>
+                    <textarea name="message" class="form-input form-textarea" placeholder="Digite a mensagem..."></textarea>
                 </div>
                 
                 <div class="form-group">
@@ -2175,8 +2208,6 @@ def broadcast():
                     <label class="filter-option">
                         <input type="checkbox" name="filter_active" checked> Ativos (últimas 72h)
                     </label>
-                    
-                    
                     <label class="filter-option" style="background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--danger);">
                         <input type="checkbox" name="filter_locked"> 
                         <div>
@@ -2186,7 +2217,6 @@ def broadcast():
                             </div>
                         </div>
                     </label>
-                    
                 </div>
                 
                 <button type="submit" class="btn btn-primary">
@@ -2214,10 +2244,11 @@ def broadcast():
             </div>
         </div>
         
-      
         <div class="card" style="background: rgba(102, 126, 234, 0.1); border-left: 4px solid var(--primary);">
-            <div class="card-title">ℹ️ Como funciona o Broadcast para Travados</div>
+            <div class="card-title">ℹ️ Como funciona</div>
             <ul style="font-size: 14px; line-height: 1.8; color: #666;">
+                <li>📷 <strong>Nova!</strong> Envie foto com ou sem legenda</li>
+                <li>🖼️ Use fotos da galeria ou faça upload direto</li>
                 <li>✅ Envia apenas para usuários que atingiram o limite diário (travados)</li>
                 <li>🔄 Sistema inteligente: não envia a mesma mensagem repetida durante o travamento</li>
                 <li>♻️ Se o usuário sair do travamento e voltar, ele pode receber a mensagem novamente</li>
@@ -2226,6 +2257,74 @@ def broadcast():
             </ul>
         </div>
     </div>
+    
+    <!-- NOVO: Modal da Galeria -->
+    <div class="modal-overlay" id="galleryModal" onclick="if(event.target===this)closeModal('galleryModal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🖼️ Selecionar da Galeria</h3>
+                <span class="modal-close" onclick="closeModal('galleryModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="gallery-grid">
+                    {gallery_html if gallery_html else '<p style="text-align:center;color:#888;">Galeria vazia</p>'}
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function previewPhoto(event) {{
+            const file = event.target.files[0];
+            if (file) {{
+                const reader = new FileReader();
+                reader.onload = (e) => {{
+                    document.getElementById('previewImg').src = e.target.result;
+                    document.getElementById('photoName').textContent = file.name;
+                    document.getElementById('photoPreview').classList.add('active');
+                }};
+                reader.readAsDataURL(file);
+            }}
+        }}
+        
+        function removePhoto() {{
+            document.getElementById('photoPreview').classList.remove('active');
+            document.getElementById('photoInput').value = '';
+        }}
+        
+        async function selectBroadcastPhoto(photoId, photoName) {{
+            // Buscar foto da galeria
+            const resp = await fetch('/api/galeria/get/' + photoId);
+            const data = await resp.json();
+            
+            if (data.success) {{
+                // Criar blob e converter para File
+                const byteCharacters = atob(data.photo);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {{
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }}
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], {{ type: 'image/jpeg' }});
+                
+                // Criar um objeto File
+                const file = new File([blob], photoName, {{ type: 'image/jpeg' }});
+                
+                // Criar DataTransfer para setar no input
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                document.getElementById('photoInput').files = dataTransfer.files;
+                
+                // Mostrar preview
+                document.getElementById('previewImg').src = 'data:image/jpeg;base64,' + data.photo;
+                document.getElementById('photoName').textContent = photoName;
+                document.getElementById('photoPreview').classList.add('active');
+                
+                closeModal('galleryModal');
+                showToast('📷 Foto selecionada: ' + photoName, 'success');
+            }}
+        }}
+    </script>
     """
     
     return render_page("Broadcast", content, "broadcast")
@@ -3124,6 +3223,24 @@ def read_all_alerts():
     
     mark_all_alerts_read()
     return jsonify({"success": True})
+
+@app.route("/api/galeria/get/<photo_id>")
+def get_gallery_photo(photo_id):
+    if not session.get("authenticated"):
+        return jsonify({"success": False}), 401
+    
+    try:
+        photos = get_gallery()
+        for p in photos:
+            if p["id"] == photo_id:
+                return jsonify({
+                    "success": True,
+                    "photo": p["data"],
+                    "name": p["name"]
+                })
+        return jsonify({"success": False, "error": "Foto não encontrada"}), 404
+    except:
+        return jsonify({"success": False, "error": "Erro ao buscar foto"}), 500
 
 @app.route("/api/takeover/<uid>", methods=["POST"])
 def takeover_route(uid):

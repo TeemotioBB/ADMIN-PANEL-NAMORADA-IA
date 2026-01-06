@@ -131,25 +131,91 @@ def send_telegram_photo(chat_id, photo_data, caption=""):
     except Exception as e:
         return False, str(e)
 
-def send_telegram_photo_by_url(chat_id, photo_url, caption=""):
-    """Envia foto por URL (para galeria)"""
+def send_telegram_message_with_button(chat_id, text):
+    """Envia mensagem com botão de pagamento PIX"""
     if not TELEGRAM_TOKEN:
         return False, "Token não configurado"
     
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
     try:
+        # Criar botão inline
+        keyboard = {
+            "inline_keyboard": [[
+                {
+                    "text": "💳 PAGAR COM PIX",
+                    "callback_data": "pix_payment"
+                }
+            ]]
+        }
+        
         data = json.dumps({
             "chat_id": chat_id,
-            "photo": photo_url,
-            "caption": caption
+            "text": text,
+            "parse_mode": "Markdown",
+            "reply_markup": keyboard
         }).encode('utf-8')
         
         req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
         
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             result = json.loads(response.read().decode('utf-8'))
             return (True, "Enviado") if result.get("ok") else (False, result.get("description", "Erro"))
+                
+    except Exception as e:
+        return False, str(e)
+
+def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
+    """Envia foto com botão de pagamento PIX"""
+    if not TELEGRAM_TOKEN:
+        return False, "Token não configurado"
+    
+    import uuid
+    boundary = str(uuid.uuid4())
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    
+    try:
+        # Criar botão inline
+        keyboard = {
+            "inline_keyboard": [[
+                {
+                    "text": "💳 PAGAR COM PIX",
+                    "callback_data": "pix_payment"
+                }
+            ]]
+        }
+        
+        body = b''
+        body += f'--{boundary}\r\n'.encode()
+        body += b'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+        body += f'{chat_id}\r\n'.encode()
+        
+        if caption:
+            body += f'--{boundary}\r\n'.encode()
+            body += b'Content-Disposition: form-data; name="caption"\r\n\r\n'
+            body += f'{caption}\r\n'.encode()
+        
+        # Adicionar reply_markup
+        body += f'--{boundary}\r\n'.encode()
+        body += b'Content-Disposition: form-data; name="reply_markup"\r\n\r\n'
+        body += json.dumps(keyboard).encode('utf-8')
+        body += b'\r\n'
+        
+        body += f'--{boundary}\r\n'.encode()
+        body += b'Content-Disposition: form-data; name="photo"; filename="photo.jpg"\r\n'
+        body += b'Content-Type: image/jpeg\r\n\r\n'
+        body += photo_data
+        body += b'\r\n'
+        body += f'--{boundary}--\r\n'.encode()
+        
+        req = urllib.request.Request(url, data=body, headers={
+            'Content-Type': f'multipart/form-data; boundary={boundary}'
+        }, method='POST')
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return (True, "Foto enviada") if result.get("ok") else (False, result.get("description", "Erro"))
+                
     except Exception as e:
         return False, str(e)
 
@@ -2107,11 +2173,21 @@ def broadcast():
                         skipped += 1
                         continue
                 
-                # NOVO: Enviar foto ou texto
-                if photo_data:
-                    success, _ = send_telegram_photo(uid, photo_data, message)
+                # NOVO: Enviar foto ou texto COM BOTÃO PIX
+                add_pix_button = request.form.get("add_pix_button") == "on"
+                
+                if add_pix_button:
+                    # Enviar com botão PIX
+                    if photo_data:
+                        success, _ = send_telegram_photo_with_button(uid, photo_data, message)
+                    else:
+                        success, _ = send_telegram_message_with_button(uid, message)
                 else:
-                    success, _ = send_telegram_message(uid, message)
+                    # Enviar sem botão
+                    if photo_data:
+                        success, _ = send_telegram_photo(uid, photo_data, message)
+                    else:
+                        success, _ = send_telegram_message(uid, message)
                 
                 if success:
                     sent += 1
@@ -2196,7 +2272,21 @@ def broadcast():
                     <label class="form-label">Mensagem (legenda se tiver foto)</label>
                     <textarea name="message" class="form-input form-textarea" placeholder="Digite a mensagem..."></textarea>
                 </div>
-                
+
+
+
+                <div class="form-group">
+                    <label class="form-label">💳 Pagamento</label>
+                    <label class="filter-option" style="background: rgba(16, 185, 129, 0.1); border-left: 3px solid var(--success);">
+                        <input type="checkbox" name="add_pix_button" checked> 
+                        <div>
+                            <strong>💳 Adicionar botão "PAGAR COM PIX"</strong>
+                            <div style="font-size: 12px; color: #888; margin-top: 3px;">
+                                Adiciona botão interativo embaixo da mensagem
+                            </div>
+                        </div>
+                    </label>
+                </div>
                 <div class="form-group">
                     <label class="form-label">Filtros</label>
                     <label class="filter-option">

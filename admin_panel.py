@@ -178,7 +178,7 @@ def send_telegram_message_with_button(chat_id, text):
         keyboard = {
             "inline_keyboard": [[
                 {
-                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                    "text": "💳 PAGAR COM PIX (R$ 4,99)",
                     "callback_data": "pay_pix"
                 }
             ]]
@@ -214,7 +214,7 @@ def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
         keyboard = {
             "inline_keyboard": [[
                 {
-                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                    "text": "💳 PAGAR COM PIX (R$ 4,99)",
                     "callback_data": "pay_pix"
                 }
             ]]

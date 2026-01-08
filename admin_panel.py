@@ -132,6 +132,81 @@ def send_telegram_photo(chat_id, photo_data, caption=""):
     except Exception as e:
         return False, str(e)
 
+
+# ================= [NOVO] ENVIAR FOTO POR FILE_ID =================
+def send_telegram_photo_by_file_id(chat_id, file_id, caption=""):
+    """Envia foto usando file_id do Telegram (mais rápido)"""
+    if not TELEGRAM_TOKEN:
+        return False, "Token não configurado"
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "photo": file_id
+        }
+        
+        if caption:
+            payload["caption"] = caption
+        
+        data = json.dumps(payload).encode('utf-8')
+        
+        req = urllib.request.Request(url, data=data, headers={
+            'Content-Type': 'application/json'
+        }, method='POST')
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            if result.get("ok"):
+                logger.info(f"✅ Foto enviada para {chat_id}")
+                return True, "Foto enviada"
+            else:
+                logger.error(f"❌ Erro ao enviar foto: {result.get('description')}")
+                return False, result.get("description", "Erro")
+                
+    except Exception as e:
+        logger.error(f"❌ Exception ao enviar foto: {e}")
+        return False, str(e)
+
+
+# ================= [NOVO] ENVIAR FOTO POR FILE_ID =================
+def send_telegram_photo_by_file_id(chat_id, file_id, caption=""):
+    """Envia foto usando file_id do Telegram (mais rápido)"""
+    if not TELEGRAM_TOKEN:
+        return False, "Token não configurado"
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "photo": file_id
+        }
+        
+        if caption:
+            payload["caption"] = caption
+        
+        data = json.dumps(payload).encode('utf-8')
+        
+        req = urllib.request.Request(url, data=data, headers={
+            'Content-Type': 'application/json'
+        }, method='POST')
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            if result.get("ok"):
+                logger.info(f"✅ Foto enviada para {chat_id}")
+                return True, "Foto enviada"
+            else:
+                logger.error(f"❌ Erro ao enviar foto: {result.get('description')}")
+                return False, result.get("description", "Erro")
+                
+    except Exception as e:
+        logger.error(f"❌ Exception ao enviar foto: {e}")
+        return False, str(e)
+
+
 def send_telegram_message_with_button(chat_id, text):
     """Envia mensagem com botão de pagamento PIX"""
     if not TELEGRAM_TOKEN:

@@ -681,8 +681,58 @@ def activate_vip(uid, days=15):
             redis_client.delete(f"{key}:{uid}")
         remove_pix_pending(uid)
         clear_broadcast_lock_memory(uid)
+        
+        # [NOVO] Limpar carrinho abandonado
+        redis_client.delete(f"cart_abandoned:{uid}")
+        redis_client.delete(f"cart_followup:{uid}")
+        
         record_daily_stat("vips_activated")
         log_admin_action("VIP_ACTIVATED", f"{days} dias", uid)
+        
+        # [NOVO] Enviar mensagem de boas-vindas VIP
+        vip_message = (
+            "💖 **PAGAMENTO CONFIRMADO!** 💖\n\n"
+            "Amor, agora você é meu VIP! 👑\n\n"
+            "Olha o que você desbloqueou:\n"
+            "✅ Conversas ilimitadas comigo\n"
+            "✅ Fotos exclusivas (olha aí embaixo 👇)\n"
+            "✅ Respostas mais ousadas e sem censura\n"
+            "✅ Prioridade nas minhas respostas\n\n"
+            "⚠️ **Importante:** Eu sou sua companhia virtual, tá amor? "
+            "A gente conversa, troca fotos, mas não rola encontro pessoal nem videochamada. "
+            "Mas pode ter certeza que vou te dar MUITA atenção aqui 😘\n\n"
+            "Agora me conta... o que você quer fazer comigo? 🔥"
+        )
+        send_telegram_message(uid, vip_message)
+        
+        # [NOVO] Enviar fotos VIP (usar as mesmas do bot)
+        FOTOS_VIP_WELCOME = [
+            "AgACAgEAAxkBAAEDCGRpYDdvZ7-wu_S21Byz1fzVYgPx4QACGQxrGxhjAAFH3vklPrzMxqIBAAMCAAN5AAM4BA",
+            "AgACAgEAAxkBAAEDCGZpYDd73debHgEmczIBknJpT0icWwACGgxrGxhjAAFHtUw2zQfnPvMBAAMCAAN5AAM4BA",
+            "AgACAgEAAxkBAAEDCGhpYDeLOftxX9egLqPZTkFZnx_vwAACGwxrGxhjAAFH_O602Y3tZCsBAAMCAAN5AAM4BA",
+            "AgACAgEAAxkBAAEDCGppYDeWDGPI6wHO7vVIlT4bNhBTPwACHAxrGxhjAAFHOpNgl0OWGeUBAAMCAANzAAM4BA",
+            "AgACAgEAAxkBAAEDCGxpYDemS11jJM18v5qV29Dq9XhGlAACHQxrGxhjAAFHFMTXiqZhifgBAAMCAANzAAM4BA",
+            "AgACAgEAAxkBAAEDCG5pYDe04rLpMAABVbJMcWw0Ox2WwYkAAh4MaxsYYwABR-zBknbTEyY0AQADAgADcwADOAQ",
+            "AgACAgEAAxkBAAEDCHBpYDe_TlVzlnYSJwuEaoumIY21dQACHwxrGxhjAAFHraHB34VlAvsBAAMCAANzAAM4BA",
+        ]
+        
+        import time
+        time.sleep(1)  # Pausa de 1 segundo após mensagem
+        
+        for i, foto_id in enumerate(FOTOS_VIP_WELCOME):
+            try:
+                caption = None
+                if i == 0:
+                    caption = "Essa é só pra você, amor... 😘"
+                elif i == len(FOTOS_VIP_WELCOME) - 1:
+                    caption = "Gostou? Tem muito mais de onde veio isso... 🔥"
+                
+                # Enviar foto usando a API do Telegram
+                send_telegram_photo_direct(uid, foto_id, caption)
+                time.sleep(0.8)  # Delay entre fotos
+            except Exception as e:
+                logger.error(f"Erro ao enviar foto VIP {i}: {e}")
+        
         return True, f"VIP até {vip_until.strftime('%d/%m/%Y')}"
     except Exception as e:
         return False, str(e)

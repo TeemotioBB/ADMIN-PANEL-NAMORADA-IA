@@ -215,49 +215,31 @@ def send_telegram_message_with_button(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
     try:
-        # Criar botão inline
-        keyboard = {
-            "inline_keyboard": [[
-                {
-                    "text": "💳 PAGAR COM PIX",
-                    "callback_data": "pix_payment"
-                }
-            ]]
-        }
+        # Pegar link da config
+        config = get_config()
+        payment_url = config.get("pix_payment_url", "")
         
-        data = json.dumps({
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-            "reply_markup": keyboard
-        }).encode('utf-8')
-        
-        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
-        
-        with urllib.request.urlopen(req, timeout=10) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return (True, "Enviado") if result.get("ok") else (False, result.get("description", "Erro"))
-                
-    except Exception as e:
-        return False, str(e)
-
-def send_telegram_message_with_button(chat_id, text):
-    """Envia mensagem com botão de pagamento PIX"""
-    if not TELEGRAM_TOKEN:
-        return False, "Token não configurado"
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
-    try:
-        # Criar botão inline - callback_data precisa ser "pay_pix" (mesma do bot)
-        keyboard = {
-            "inline_keyboard": [[
-                {
-                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
-                    "callback_data": "pay_pix"
-                }
-            ]]
-        }
+        # Criar botão
+        if payment_url:
+            # Com link direto
+            keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                        "url": payment_url
+                    }
+                ]]
+            }
+        else:
+            # Fallback
+            keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                        "callback_data": "pay_pix"
+                    }
+                ]]
+            }
         
         data = json.dumps({
             "chat_id": chat_id,
@@ -285,15 +267,31 @@ def send_telegram_photo_with_button(chat_id, photo_data, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     
     try:
-        # Criar botão inline - callback_data precisa ser "pay_pix" (mesma do bot)
-        keyboard = {
-            "inline_keyboard": [[
-                {
-                    "text": "💳 PAGAR COM PIX (R$ 9,99)",
-                    "callback_data": "pay_pix"
-                }
-            ]]
-        }
+        # Pegar link da config
+        config = get_config()
+        payment_url = config.get("pix_payment_url", "")
+        
+        # Criar botão
+        if payment_url:
+            # Com link direto
+            keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                        "url": payment_url
+                    }
+                ]]
+            }
+        else:
+            # Fallback
+            keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "💳 PAGAR COM PIX (R$ 9,99)",
+                        "callback_data": "pay_pix"
+                    }
+                ]]
+            }
         
         body = b''
         body += f'--{boundary}\r\n'.encode()
@@ -365,6 +363,7 @@ DEFAULT_CONFIG = {
     "preco_pix": "14.99",
     "preco_pix_desconto": "9.99",
     "pix_key": "mayaoficialbr@outlook.com",
+    "pix_payment_url": "https://app.pushinpay.com.br/service/pay/A0D7D476-E44F-42EB-AECA-1EF20EE5C01E",
     "msg_limite": "💔 Seu limite diário acabou.\nVolte amanhã ou vire VIP 💖",
     "msg_vip_ativado": "💖 Pagamento aprovado!\nVIP ativo por {dias} dias 😘",
     "msg_bom_dia": "Bom dia amor! ☀️ Como você dormiu? 💕",

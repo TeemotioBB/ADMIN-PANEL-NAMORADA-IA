@@ -3567,19 +3567,19 @@ def exportar_txt():
     all_users = get_all_users()
     output = []
     
-    # Calcular limite de 24 horas atrás
+    # Limite de 24 horas
     now = datetime.now()
     limite_24h = now - timedelta(hours=24)
     
     output.append("=" * 60)
     output.append("RELATORIO DE CONVERSAS - SOPHIA BOT")
-    output.append("ULTIMAS 24 HORAS")
+    output.append("*** ULTIMAS 24 HORAS ***")
     output.append(f"Data: {now.strftime('%d/%m/%Y %H:%M')}")
     output.append(f"Periodo: {limite_24h.strftime('%d/%m/%Y %H:%M')} ate agora")
     output.append("=" * 60)
     output.append("")
     
-    users_with_recent_msgs = 0
+    users_24h = 0
     
     for uid in all_users:
         stats = get_user_stats(uid)
@@ -3588,55 +3588,11 @@ def exportar_txt():
         if not messages:
             continue
         
-        # FILTRO: Só incluir usuários com atividade nas últimas 24h
+        # FILTRO 24H - pula quem não teve atividade recente
         if not stats['last_activity'] or stats['last_activity'] < limite_24h:
             continue
         
-        users_with_recent_msgs += 1
-        user_msgs = len([m for m in messages if m['role'] == 'user'])
-        
-        output.append("-" * 60)
-        output.append(f"USUARIO: {uid}")
-        output.append(f"VIP: {'Sim' if stats['is_vip'] else 'Nao'}")
-        output.append(f"Msgs do usuario: {user_msgs}")
-        output.append(f"Total msgs: {len(messages)}")
-        output.append(f"Travado: {'Sim' if stats['is_locked'] else 'Nao'}")
-        output.append(f"Ultima atividade: {stats['last_activity'].strftime('%d/%m/%Y %H:%M')}")
-        output.append("-" * 60)
-        output.append("")
-        
-        for msg in messages:
-            role_label = {
-                'user': 'USER',
-                'assistant': 'SOPHIA', 
-                'admin': 'ADMIN',
-                'system': 'SISTEMA',
-                'action': 'ACAO',
-                'info': 'INFO'
-            }.get(msg['role'], msg['role'].upper())
-            
-            output.append(f"[{msg['time']}] {role_label}:")
-            output.append(f"   {msg['text']}")
-            output.append("")
-        
-        output.append("")
-    
-    vips = sum(1 for uid in all_users if get_user_stats(uid)['is_vip'])
-    output.append("=" * 60)
-    output.append("RESUMO - ULTIMAS 24 HORAS")
-    output.append(f"Usuarios ativos (24h): {users_with_recent_msgs}")
-    output.append(f"Total usuarios: {len(all_users)}")
-    output.append(f"VIPs: {vips}")
-    output.append(f"Conversao: {(vips/len(all_users)*100) if all_users else 0:.1f}%")
-    output.append("=" * 60)
-    
-    response = app.response_class(
-        response="\n".join(output),
-        status=200,
-        mimetype='text/plain; charset=utf-8'
-    )
-    response.headers["Content-Disposition"] = f"attachment; filename=conversas_sophia_24h_{now.strftime('%Y%m%d_%H%M')}.txt"
-    return response
+        users_24h += 1
 
 
 if __name__ == "__main__":

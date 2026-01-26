@@ -3567,12 +3567,19 @@ def exportar_txt():
     all_users = get_all_users()
     output = []
     
+    # Calcular limite de 24 horas atrás
+    now = datetime.now()
+    limite_24h = now - timedelta(hours=24)
+    
     output.append("=" * 60)
     output.append("RELATORIO DE CONVERSAS - SOPHIA BOT")
-    output.append(f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    output.append(f"Total de usuarios: {len(all_users)}")
+    output.append("ULTIMAS 24 HORAS")
+    output.append(f"Data: {now.strftime('%d/%m/%Y %H:%M')}")
+    output.append(f"Periodo: {limite_24h.strftime('%d/%m/%Y %H:%M')} ate agora")
     output.append("=" * 60)
     output.append("")
+    
+    users_with_recent_msgs = 0
     
     for uid in all_users:
         stats = get_user_stats(uid)
@@ -3581,6 +3588,11 @@ def exportar_txt():
         if not messages:
             continue
         
+        # FILTRO: Só incluir usuários com atividade nas últimas 24h
+        if not stats['last_activity'] or stats['last_activity'] < limite_24h:
+            continue
+        
+        users_with_recent_msgs += 1
         user_msgs = len([m for m in messages if m['role'] == 'user'])
         
         output.append("-" * 60)
@@ -3589,6 +3601,7 @@ def exportar_txt():
         output.append(f"Msgs do usuario: {user_msgs}")
         output.append(f"Total msgs: {len(messages)}")
         output.append(f"Travado: {'Sim' if stats['is_locked'] else 'Nao'}")
+        output.append(f"Ultima atividade: {stats['last_activity'].strftime('%d/%m/%Y %H:%M')}")
         output.append("-" * 60)
         output.append("")
         
@@ -3610,7 +3623,8 @@ def exportar_txt():
     
     vips = sum(1 for uid in all_users if get_user_stats(uid)['is_vip'])
     output.append("=" * 60)
-    output.append("RESUMO")
+    output.append("RESUMO - ULTIMAS 24 HORAS")
+    output.append(f"Usuarios ativos (24h): {users_with_recent_msgs}")
     output.append(f"Total usuarios: {len(all_users)}")
     output.append(f"VIPs: {vips}")
     output.append(f"Conversao: {(vips/len(all_users)*100) if all_users else 0:.1f}%")
@@ -3621,7 +3635,7 @@ def exportar_txt():
         status=200,
         mimetype='text/plain; charset=utf-8'
     )
-    response.headers["Content-Disposition"] = "attachment; filename=conversas_sophia.txt"
+    response.headers["Content-Disposition"] = f"attachment; filename=conversas_sophia_24h_{now.strftime('%Y%m%d_%H%M')}.txt"
     return response
 
 

@@ -1268,8 +1268,8 @@ def render_sidebar(active_page):
             <a href="/logs" class="menu-item {'active' if active_page == 'logs' else ''}">
                 <span class="icon">📝</span> Logs
             </a>
-            <a href="/exportar-txt" class="menu-item">
-                <span class="icon">📥</span> Exportar
+            <a href="/exportar" class="menu-item {'active' if active_page == 'exportar' else ''}">
+                <span class="icon">📥</span> Exportar Conversas
             </a>
             <a href="/config" class="menu-item {'active' if active_page == 'config' else ''}">
                 <span class="icon">⚙️</span> Config
@@ -2535,17 +2535,17 @@ def health():
 def exportar_conversas():
     if not session.get("authenticated"):
         return redirect("/login")
-    
+   
     all_users = get_all_users()
     export_data = []
-    
+   
     for uid in all_users:
         stats = get_user_stats(uid)
         messages = get_user_messages(uid)
-        
+       
         user_msgs = [m for m in messages if m['role'] == 'user']
         sophia_msgs = [m for m in messages if m['role'] == 'assistant']
-        
+       
         user_data = {
             "uid": uid,
             "is_vip": stats['is_vip'],
@@ -2556,18 +2556,18 @@ def exportar_conversas():
             "is_locked": stats['is_locked'],
             "conversa": []
         }
-        
+       
         for msg in messages:
             user_data["conversa"].append({
                 "role": msg['role'],
                 "text": msg['text'],
                 "time": msg['time']
             })
-        
+       
         export_data.append(user_data)
-    
+   
     export_data.sort(key=lambda x: x['total_msgs'], reverse=True)
-    
+   
     response = app.response_class(
         response=json.dumps(export_data, ensure_ascii=False, indent=2),
         status=200,
@@ -2580,13 +2580,13 @@ def exportar_conversas():
 def exportar_txt():
     if not session.get("authenticated"):
         return redirect("/login")
-    
+   
     all_users = get_all_users()
     output = []
-    
+   
     now = datetime.now()
     limite_24h = now - timedelta(hours=24)
-    
+   
     output.append("=" * 60)
     output.append("RELATORIO DE CONVERSAS - SOPHIA BOT")
     output.append("*** ULTIMAS 24 HORAS ***")
@@ -2594,22 +2594,22 @@ def exportar_txt():
     output.append(f"Periodo: {limite_24h.strftime('%d/%m/%Y %H:%M')} ate agora")
     output.append("=" * 60)
     output.append("")
-    
+   
     users_24h = 0
-    
+   
     for uid in all_users:
         stats = get_user_stats(uid)
         messages = get_user_messages(uid)
-        
+       
         if not messages:
             continue
-        
+       
         if not stats['last_activity'] or stats['last_activity'] < limite_24h:
             continue
-        
+       
         users_24h += 1
         user_msgs = len([m for m in messages if m['role'] == 'user'])
-        
+       
         output.append("-" * 60)
         output.append(f"USUARIO: {uid}")
         output.append(f"VIP: {'Sim' if stats['is_vip'] else 'Nao'}")
@@ -2619,23 +2619,23 @@ def exportar_txt():
         output.append(f"Ultima atividade: {stats['last_activity'].strftime('%d/%m/%Y %H:%M')}")
         output.append("-" * 60)
         output.append("")
-        
+       
         for msg in messages:
             role_label = {
                 'user': 'USER',
-                'assistant': 'SOPHIA', 
+                'assistant': 'SOPHIA',
                 'admin': 'ADMIN',
                 'system': 'SISTEMA',
                 'action': 'ACAO',
                 'info': 'INFO'
             }.get(msg['role'], msg['role'].upper())
-            
+           
             output.append(f"[{msg['time']}] {role_label}:")
-            output.append(f"   {msg['text']}")
+            output.append(f" {msg['text']}")
             output.append("")
-        
+       
         output.append("")
-    
+   
     vips = sum(1 for uid in all_users if get_user_stats(uid)['is_vip'])
     output.append("=" * 60)
     output.append("RESUMO - ULTIMAS 24 HORAS")
@@ -2643,7 +2643,7 @@ def exportar_txt():
     output.append(f"Total usuarios geral: {len(all_users)}")
     output.append(f"VIPs: {vips}")
     output.append("=" * 60)
-    
+   
     response = app.response_class(
         response="\n".join(output),
         status=200,
@@ -2651,6 +2651,168 @@ def exportar_txt():
     )
     response.headers["Content-Disposition"] = f"attachment; filename=conversas_24h_{now.strftime('%d%m%Y_%H%M')}.txt"
     return response
+
+# ================= EXPORTAR CONVERSAS COM PERÍODO =================
+@app.route("/exportar", methods=["GET", "POST"])
+def exportar_periodo():
+    if not session.get("authenticated"):
+        return redirect("/login")
+
+    if request.method == "POST":
+        data_inicio_str = request.form.get("data_inicio")
+        data_fim_str    = request.form.get("data_fim")
+
+        try:
+            # Converter datas do input (YYYY-MM-DD) para datetime
+            data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d") if data_inicio_str else None
+            data_fim    = datetime.strptime(data_fim_str,    "%Y-%m-%d") if data_fim_str    else None
+
+            if data_fim:
+                # Incluir o dia inteiro final
+                data_fim = data_fim.replace(hour=23, minute=59, second=59)
+
+            all_users = get_all_users()
+            linhas = []
+            total_usuarios = 0
+            total_mensagens = 0
+
+            linhas.append("=" * 80)
+            linhas.append("EXPORTAÇÃO DE CONVERSAS - SOPHIA BOT")
+            linhas.append(f"Período: {data_inicio_str or 'Início dos registros'} até {data_fim_str or 'Hoje'}")
+            linhas.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+            linhas.append("=" * 80)
+            linhas.append("")
+
+            for uid in all_users:
+                # Pegar última atividade para filtrar rápido
+                last_act_str = redis_client.get(f"last_activity:{uid}")
+                if not last_act_str:
+                    continue
+
+                try:
+                    last_act = datetime.fromisoformat(last_act_str)
+                except:
+                    continue
+
+                # Filtro por período
+                if data_inicio and last_act < data_inicio:
+                    continue
+                if data_fim and last_act > data_fim:
+                    continue
+
+                messages = get_user_messages(uid)
+                if not messages:
+                    continue
+
+                # Filtrar mensagens dentro do período (mais preciso)
+                msgs_filtradas = []
+                for msg in messages:
+                    try:
+                        # Como o chatlog só tem hora (sem data), usamos a data da última atividade
+                        msg_time = datetime.strptime(msg['time'], "%H:%M:%S").replace(
+                            year=last_act.year, month=last_act.month, day=last_act.day
+                        )
+                        if data_inicio and msg_time < data_inicio:
+                            continue
+                        if data_fim and msg_time > data_fim:
+                            continue
+                        msgs_filtradas.append(msg)
+                    except:
+                        # Se falhar no parse, inclui (segurança)
+                        msgs_filtradas.append(msg)
+
+                if not msgs_filtradas:
+                    continue
+
+                total_usuarios += 1
+                total_mensagens += len(msgs_filtradas)
+
+                stats = get_user_stats(uid)
+
+                linhas.append("-" * 80)
+                linhas.append(f"USUÁRIO: {uid}")
+                linhas.append(f"Status: {stats['status'].upper()}")
+                linhas.append(f"É VIP: {'SIM' if stats['is_vip'] else 'NÃO'}")
+                linhas.append(f"Travado hoje: {'SIM' if stats['is_locked'] else 'NÃO'}")
+                linhas.append(f"Total mensagens no período: {len(msgs_filtradas)}")
+                linhas.append(f"Última atividade: {format_time_ago(stats['last_activity'])}")
+                linhas.append("-" * 80)
+                linhas.append("")
+
+                for msg in msgs_filtradas:
+                    role_label = {
+                        'user': 'USER     ',
+                        'assistant': 'SOPHIA   ',
+                        'admin': 'ADMIN    ',
+                        'system': 'SISTEMA  ',
+                        'action': 'AÇÃO     '
+                    }.get(msg['role'], msg['role'].upper().ljust(9))
+
+                    linhas.append(f"[{msg['time']}] {role_label}: {msg['text']}")
+                    linhas.append("")
+
+                linhas.append("\n\n")
+
+            # Resumo final
+            linhas.append("=" * 80)
+            linhas.append("RESUMO DA EXPORTAÇÃO")
+            linhas.append(f"Período selecionado: {data_inicio_str or '—'} → {data_fim_str or 'Hoje'}")
+            linhas.append(f"Total de usuários com atividade: {total_usuarios}")
+            linhas.append(f"Total de mensagens exportadas: {total_mensagens}")
+            linhas.append("=" * 80)
+
+            txt_content = "\n".join(linhas)
+
+            # Nome do arquivo com período
+            filename = f"conversas_{data_inicio_str or 'all'}_ate_{data_fim_str or 'hoje'}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+
+            return send_file(
+                BytesIO(txt_content.encode('utf-8')),
+                mimetype='text/plain; charset=utf-8',
+                as_attachment=True,
+                download_name=filename
+            )
+
+        except Exception as e:
+            return f"<h2 style='color:red'>Erro ao gerar exportação: {str(e)}</h2><br><a href='/exportar'>Voltar</a>"
+
+    # GET - Mostra formulário
+    hoje = date.today().isoformat()
+    sete_dias_atras = (date.today() - timedelta(days=7)).isoformat()
+
+    content = f"""
+    <div class="container">
+        <div class="card">
+            <div class="card-title">📥 Exportar Conversas por Período</div>
+            
+            <form method="post">
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:20px; margin:30px 0;">
+                    <div class="form-group">
+                        <label class="form-label">Data Inicial</label>
+                        <input type="date" name="data_inicio" class="form-input" value="{sete_dias_atras}">
+                        <small style="color:#888">Deixe em branco para pegar desde o início</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Data Final (inclusive)</label>
+                        <input type="date" name="data_fim" class="form-input" value="{hoje}" max="{hoje}">
+                        <small style="color:#888">Hoje é o padrão</small>
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary" style="width:100%; padding:16px; font-size:18px;">
+                    <i class="fas fa-download"></i> Gerar e Baixar TXT
+                </button>
+                
+                <p style="margin-top:20px; text-align:center; color:#888; font-size:14px;">
+                    O arquivo será gerado com todas as conversas que tiveram atividade no período escolhido.
+                </p>
+            </form>
+        </div>
+    </div>
+    """
+
+    return render_page("Exportar Conversas", content, "exportar")
 
 if __name__ == "__main__":
     logger.info(f"🚀 Sophia Admin v5.1 SUPER FAST - Porta {PORT}")

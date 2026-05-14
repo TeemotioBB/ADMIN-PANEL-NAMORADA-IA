@@ -1,15 +1,17 @@
-# #!/usr/bin/env python3
-“””
-Sophia Admin Panel v6 — Refactor UI/UX
+#!/usr/bin/env python3
+"""
+Sophia Admin Panel v6 - Refactor UI/UX
 
-- 100% das funcionalidades preservadas (Redis, Telegram, ações, broadcast, takeover)
+- 100% das funcionalidades preservadas (Redis, Telegram, acoes, broadcast, takeover)
 - UI completamente refeita: dark-mode default, mobile-first, terminal-style
-- CSS/JS extraídos para rotas com cache HTTP de 1 dia (economia de ~15KB/page-load)
-- Dashboard com AJAX (filtros/busca sem reload da página)
-- Ícones SVG inline (sem FontAwesome → economia de ~80KB)
-- Chart.js só na página /analytics
+- CSS/JS extraidos para rotas com cache HTTP de 1 dia (economia de ~15KB/page-load)
+- Dashboard com AJAX (filtros/busca sem reload da pagina)
+- Icones SVG inline (sem FontAwesome -> economia de ~80KB)
+- Chart.js so na pagina /analytics
 - Bug fix: thumbnails da galeria estavam truncadas e quebravam imagens
-  “””
+"""
+
+
 
 import os
 import json

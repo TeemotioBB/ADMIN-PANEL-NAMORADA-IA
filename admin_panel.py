@@ -1432,7 +1432,7 @@ load();
 // Auto-refresh every 30s when tab visible
 let refreshTimer;
 function startRefresh(){
-  refreshTimer = setInterval(load, 30000);
+  refreshTimer = setInterval(load, 60000);
 }
 document.addEventListener('visibilitychange', function(){
   if (document.hidden) clearInterval(refreshTimer);
@@ -1596,41 +1596,166 @@ def logout():
 
 # ========================= API: DASHBOARD DATA =========================
 
+def get_dashboard_users_fast(filter_type="all", q=""):
+    """Carrega o dashboard sem varrer mensagens de todos os usuários.
+
+    O fluxo antigo chamava get_user_stats(uid) para cada usuário e lia até 100
+    mensagens de cada chatlog antes de mostrar somente 50 cards. Aqui usamos
+    pipeline para buscar dados leves de todos os usuários e só depois lemos o
+    chatlog dos 50 usuários que realmente aparecem na tela.
+    """
+    if not check_redis():
+        return {
+            "users": [],
+            "stats": {"total": 0, "vips": 0, "online": 0, "idle": 0, "locked": 0}
+        }
+
+    all_uids = get_all_users()
+    favorites = set(get_favorites())
+    today = date.today()
+    now = datetime.now()
+
+    stats = {
+        "total": len(all_uids),
+        "vips": 0,
+        "online": 0,
+        "idle": 0,
+        "locked": 0,
+    }
+
+    if not all_uids:
+        return {"users": [], "stats": stats}
+
+    pipe = redis_client.pipeline()
+    for uid in all_uids:
+        pipe.get(f"vip:{uid}")
+        pipe.get(f"count:{uid}:{today}")
+        pipe.get(f"last_activity:{uid}")
+
+    try:
+        results = pipe.execute()
+    except Exception as e:
+        logger.error(f"Erro ao carregar dashboard: {e}")
+        return {"users": [], "stats": stats}
+
+    rows = []
+
+    for i, uid in enumerate(all_uids):
+        vip_raw, count_raw, activity_raw = results[i * 3:i * 3 + 3]
+
+        is_vip = False
+        if vip_raw:
+            try:
+                is_vip = datetime.fromisoformat(vip_raw) > now
+            except Exception:
+                pass
+
+        try:
+            today_count = int(count_raw or 0)
+        except Exception:
+            today_count = 0
+
+        is_locked = today_count >= 15 and not is_vip
+
+        last_activity = None
+        status = "offline"
+        if activity_raw:
+            try:
+                last_activity = datetime.fromisoformat(activity_raw)
+                diff_min = (now - last_activity).total_seconds() / 60
+                if diff_min < ONLINE_THRESHOLD:
+                    status = "online"
+                elif diff_min < IDLE_THRESHOLD:
+                    status = "idle"
+            except Exception:
+                pass
+
+        if is_vip:
+            stats["vips"] += 1
+        if is_locked:
+            stats["locked"] += 1
+        if status == "online":
+            stats["online"] += 1
+        elif status == "idle":
+            stats["idle"] += 1
+
+        if q and q not in uid.lower():
+            continue
+        if filter_type == "vip" and not is_vip:
+            continue
+        if filter_type == "online" and status != "online":
+            continue
+        if filter_type == "idle" and status != "idle":
+            continue
+        if filter_type == "locked" and not is_locked:
+            continue
+        if filter_type == "favorites" and uid not in favorites:
+            continue
+
+        rows.append({
+            "id": uid,
+            "id_short": uid[:20] + ("…" if len(uid) > 20 else ""),
+            "status": status,
+            "is_vip": is_vip,
+            "is_locked": is_locked,
+            "is_fav": uid in favorites,
+            "last_activity": last_activity,
+            "total_messages": 0,
+            "preview": None,
+            "last_ago": format_time_ago(last_activity),
+        })
+
+    rows.sort(key=lambda x: x["last_activity"] or datetime.min, reverse=True)
+    rows = rows[:50]
+
+    # Só busca mensagens dos cards que serão exibidos.
+    if rows:
+        pipe = redis_client.pipeline()
+        for user in rows:
+            pipe.lrange(f"chatlog:{user['id']}", -100, -1)
+        try:
+            chatlogs = pipe.execute()
+        except Exception as e:
+            logger.error(f"Erro ao carregar previews do dashboard: {e}")
+            chatlogs = [[] for _ in rows]
+    else:
+        chatlogs = []
+
+    for user, logs in zip(rows, chatlogs):
+        messages = []
+        last_user_message = None
+        seen = set()
+
+        for log in logs:
+            msg = parse_chat_message(log)
+            if not msg:
+                continue
+            k = f"{msg['role']}:{msg['time']}:{msg['text'][:20]}"
+            if k in seen:
+                continue
+            seen.add(k)
+            messages.append(msg)
+            if msg["role"] == "user":
+                last_user_message = msg["text"]
+
+        user["total_messages"] = len(messages)
+        if last_user_message:
+            user["preview"] = last_user_message[:60] + "…" if len(last_user_message) > 60 else last_user_message
+        user.pop("last_activity", None)
+
+    return {"users": rows, "stats": stats}
+
+
 @app.route("/api/users")
 def api_users():
     if not auth_required():
-        return jsonify({"error":"unauthorized"}), 401
-    filter_type = request.args.get('filter','all')
-    q = request.args.get('q','').strip().lower()
-    all_uids = get_all_users()
-    favorites = set(get_favorites())
-    rows = []
-    for uid in all_uids:
-        if q and q not in uid.lower():
-            continue
-        s = get_user_stats(uid)
-        if filter_type == 'vip' and not s['is_vip']: continue
-        if filter_type == 'online' and s['status'] != 'online': continue
-        if filter_type == 'idle' and s['status'] != 'idle': continue
-        if filter_type == 'locked' and not s['is_locked']: continue
-        if filter_type == 'favorites' and uid not in favorites: continue
-        rows.append((uid, s))
-    rows.sort(key=lambda x: x[1]['last_activity'] or datetime.min, reverse=True)
-    rows = rows[:50]
-    users = []
-    for uid, s in rows:
-        users.append({
-            "id": uid,
-            "id_short": uid[:20] + ('…' if len(uid) > 20 else ''),
-            "status": s['status'],
-            "is_vip": s['is_vip'],
-            "is_locked": s['is_locked'],
-            "is_fav": uid in favorites,
-            "total_messages": s['total_messages'],
-            "preview": s.get('last_message_preview'),
-            "last_ago": format_time_ago(s['last_activity']),
-        })
-    return jsonify({"users": users, "stats": get_global_stats()})
+        return jsonify({"error": "unauthorized"}), 401
+
+    filter_type = request.args.get("filter", "all")
+    q = request.args.get("q", "").strip().lower()
+
+    return jsonify(get_dashboard_users_fast(filter_type, q))
+
 
 # ========================= DASHBOARD =========================
 
@@ -1693,10 +1818,32 @@ def analytics():
     total_users = len(all_users)
     vip_count = 0
     total_msgs = 0
-    for uid in all_users:
-        s = get_user_stats(uid)
-        if s["is_vip"]: vip_count += 1
-        total_msgs += s["total_messages"]
+
+    # Versão otimizada: conta VIPs e tamanho dos chatlogs em pipeline.
+    # Evita chamar get_user_stats(uid) para todos os usuários.
+    if all_users and check_redis():
+        pipe = redis_client.pipeline()
+        for uid in all_users:
+            pipe.get(f"vip:{uid}")
+            pipe.llen(f"chatlog:{uid}")
+        try:
+            results = pipe.execute()
+            now = datetime.now()
+            for i in range(0, len(results), 2):
+                vip_raw, msg_count = results[i], results[i + 1]
+                if vip_raw:
+                    try:
+                        if datetime.fromisoformat(vip_raw) > now:
+                            vip_count += 1
+                    except Exception:
+                        pass
+                try:
+                    total_msgs += int(msg_count or 0)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Erro analytics pipeline: {e}")
+
     conversion = (vip_count / total_users * 100) if total_users > 0 else 0
     labels = [s["date"][-5:] for s in stats_data]
     vips_data = [s.get("vips_activated", 0) for s in stats_data]
@@ -1755,6 +1902,7 @@ window.addEventListener('load', function(){{
 }});
 </script>"""
     return render_page("Analytics", content, "analytics", extra_head=extra_head, extra_js=extra_js)
+
 
 # ========================= BROADCAST =========================
 
@@ -1928,7 +2076,22 @@ def financeiro():
     if not auth_required(): return redirect("/login")
     pending = get_pix_pending()
     all_users = get_all_users()
-    vip_count = sum(1 for u in all_users if get_user_stats(u)["is_vip"])
+    vip_count = 0
+    if all_users and check_redis():
+        pipe = redis_client.pipeline()
+        for uid in all_users:
+            pipe.get(f"vip:{uid}")
+        try:
+            now = datetime.now()
+            for vip_raw in pipe.execute():
+                if vip_raw:
+                    try:
+                        if datetime.fromisoformat(vip_raw) > now:
+                            vip_count += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Erro financeiro VIP count: {e}")
     config = get_config()
     preco = float(config.get("preco_pix","14.99"))
     receita = vip_count * preco

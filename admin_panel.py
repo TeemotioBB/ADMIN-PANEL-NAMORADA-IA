@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Sophia Admin Panel v6 - Refactor UI/UX
+Sophia Admin Panel v7 - Premium Command Center UI
 """
 
 import os
 import json
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -21,10 +24,10 @@ from functools import wraps
 
 # ========================= CONFIG =========================
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://default:DcddfJOHLXZdFPjEhRjHeodNgdtrsevl@shuttle.proxy.rlwy.net:12241")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8528168785:AAFfgtaB0vEagd1cdfZ3hWDyL9PKFZrmRjk")
+REDIS_URL = os.environ.get("REDIS_URL", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-SECRET_KEY = os.environ.get("SECRET_KEY", "sophia-secret-" + str(int(time.time())))
+SECRET_KEY = os.environ.get("SECRET_KEY") or os.urandom(32).hex()
 PORT = int(os.environ.get("PORT", 8081))
 
 ONLINE_THRESHOLD = 20
@@ -1253,6 +1256,197 @@ body.light tbody tr:hover{background:rgba(0,0,0,.02)}
 .filter-opt input{width:18px;height:18px;margin-top:2px;flex-shrink:0;accent-color:var(--accent)}
 .filter-opt strong{font-size:13px;font-weight:600;display:block;color:var(--text)}
 .filter-opt small{font-size:11.5px;color:var(--text-3);display:block;margin-top:3px}
+
+
+/* ========================= PREMIUM UI v7 ========================= */
+:root{
+  --bg:#060711;
+  --bg-elev:rgba(12,14,27,.88);
+  --surface:rgba(18,21,38,.78);
+  --surface-2:rgba(31,36,58,.78);
+  --surface-3:rgba(255,255,255,.06);
+  --border:rgba(255,255,255,.09);
+  --border-strong:rgba(255,255,255,.16);
+  --text:#f7f8ff;
+  --text-2:#b9c0d4;
+  --text-3:#7d879f;
+  --text-4:#3b4258;
+  --accent:#ff6a2a;
+  --accent-2:#8b5cf6;
+  --accent-3:#22d3ee;
+  --accent-soft:rgba(255,106,42,.15);
+  --success:#22c55e;
+  --warn:#f59e0b;
+  --danger:#ef4444;
+  --info:#38bdf8;
+  --radius:18px;
+  --radius-sm:12px;
+  --radius-lg:26px;
+  --gap:18px;
+  --pad:22px;
+  --shadow:0 24px 80px rgba(0,0,0,.44);
+  --shadow-soft:0 14px 44px rgba(0,0,0,.25);
+  --ring:0 0 0 4px rgba(255,106,42,.14);
+  --sidebar-w:286px;
+}
+body.light{
+  --bg:#f6f7fb;
+  --bg-elev:rgba(255,255,255,.9);
+  --surface:rgba(255,255,255,.86);
+  --surface-2:rgba(243,246,252,.9);
+  --surface-3:rgba(15,23,42,.04);
+  --border:rgba(15,23,42,.08);
+  --border-strong:rgba(15,23,42,.14);
+  --text:#0f172a;
+  --text-2:#475569;
+  --text-3:#768195;
+  --text-4:#cbd5e1;
+  --shadow:0 24px 70px rgba(15,23,42,.12);
+  --shadow-soft:0 12px 30px rgba(15,23,42,.08);
+}
+html{scroll-behavior:smooth}
+body{
+  min-height:100%;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(139,92,246,.22), transparent 34rem),
+    radial-gradient(circle at 88% 0%, rgba(34,211,238,.15), transparent 30rem),
+    radial-gradient(circle at 70% 72%, rgba(255,106,42,.12), transparent 28rem),
+    linear-gradient(180deg,#050610 0%,var(--bg) 48%,#080a14 100%);
+  letter-spacing:-.005em;
+}
+body.light{background:linear-gradient(180deg,#ffffff 0%,#f6f7fb 52%,#eef2f8 100%)}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;opacity:.34;
+  background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:linear-gradient(to bottom,rgba(0,0,0,.9),transparent 78%);
+}
+body.light::before{opacity:.34;background-image:linear-gradient(rgba(15,23,42,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(15,23,42,.045) 1px,transparent 1px)}
+::selection{background:rgba(255,106,42,.28)}
+:focus-visible{outline:0;box-shadow:var(--ring);border-color:var(--accent)!important}
+
+.layout{isolation:isolate}
+.main{position:relative;min-height:100vh}
+.container{max-width:1480px;padding:18px;width:100%}
+@media(min-width:768px){.container{padding:26px 30px 38px}}
+
+.sidebar{
+  background:linear-gradient(180deg,rgba(12,15,28,.96),rgba(8,10,20,.9));
+  border-right:1px solid rgba(255,255,255,.1);
+  box-shadow:18px 0 60px rgba(0,0,0,.28);
+  backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);
+}
+body.light .sidebar{background:rgba(255,255,255,.82);box-shadow:18px 0 60px rgba(15,23,42,.08)}
+.sidebar-head{padding:24px 20px 20px;border-bottom:1px solid var(--border)}
+.sidebar-dot{width:12px;height:12px;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 0 0 6px rgba(255,106,42,.1),0 0 32px rgba(255,106,42,.8)}
+.sidebar-brand{display:flex;flex-direction:column;gap:1px;font-size:16px;font-weight:800;letter-spacing:-.03em}
+.sidebar-brand strong{font-weight:850}
+.sidebar-brand span{margin:0;color:var(--text-3);font-size:11px;text-transform:uppercase;letter-spacing:.12em}
+.sidebar-nav{padding:14px 12px;gap:5px}
+.nav-item{
+  position:relative;min-height:44px;padding:11px 13px;border-radius:15px;
+  color:var(--text-2);font-weight:650;letter-spacing:-.01em;
+  transition:transform .18s ease, background .18s ease, color .18s ease, border-color .18s ease;
+}
+.nav-item::after{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid transparent;pointer-events:none}
+.nav-item:hover{transform:translateX(3px);background:rgba(255,255,255,.065);color:var(--text)}
+.nav-item.active{background:linear-gradient(135deg,rgba(255,106,42,.19),rgba(139,92,246,.13));color:var(--text);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.nav-item.active::after{border-color:rgba(255,255,255,.13)}
+.nav-item.active::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:999px;background:linear-gradient(var(--accent),var(--accent-2))}
+.nav-item .icon{color:currentColor;opacity:.78}
+.nav-item.active .icon{color:var(--accent);opacity:1;filter:drop-shadow(0 0 10px rgba(255,106,42,.45))}
+.nav-item-badge{background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 8px 20px rgba(255,106,42,.3)}
+.sidebar-foot{padding:14px 12px 18px}
+
+.topbar{
+  min-height:68px;padding:12px 18px;border-bottom:1px solid var(--border);
+  background:rgba(6,7,17,.62);backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+}
+body.light .topbar{background:rgba(255,255,255,.72)}
+.topbar-copy{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.topbar-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:var(--text-3);font-weight:800}
+.topbar-title{font-size:18px;font-weight:820;letter-spacing:-.035em;line-height:1.1}
+.topbar-status{height:34px;padding:0 12px;border-radius:999px;background:var(--surface-3);border:1px solid var(--border);display:none;align-items:center;gap:8px;color:var(--text-2);font-size:12px;font-weight:700;white-space:nowrap}
+.status-live-dot{width:7px;height:7px;border-radius:50%;background:var(--success);box-shadow:0 0 0 6px rgba(34,197,94,.13),0 0 18px rgba(34,197,94,.65);animation:pulse 1.8s ease-in-out infinite}
+@media(min-width:720px){.topbar-status{display:inline-flex}}
+.menu-btn,.btn,.chat-back,.chat-tool,.chat-attach{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+
+.btn{height:40px;border-radius:13px;background:var(--surface);border-color:var(--border);box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn:hover{transform:translateY(-1px);background:var(--surface-2);border-color:var(--border-strong)}
+.btn:active{transform:translateY(0) scale(.98)}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#ff8a3d);border:0;box-shadow:0 12px 30px rgba(255,106,42,.28)}
+.btn-success{background:linear-gradient(135deg,#16a34a,#22c55e);border:0}
+.btn-danger{background:linear-gradient(135deg,#dc2626,#ef4444);border:0}
+.btn-warn{background:linear-gradient(135deg,#d97706,#f59e0b);border:0}
+
+.page-hero{padding-top:28px;padding-bottom:6px}
+.page-hero-inner{
+  position:relative;overflow:hidden;border:1px solid var(--border);border-radius:30px;padding:24px;
+  background:linear-gradient(135deg,rgba(255,255,255,.08),rgba(255,255,255,.035));
+  box-shadow:var(--shadow-soft);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+}
+.page-hero-inner::before{content:"";position:absolute;inset:-2px;background:radial-gradient(circle at 18% 0%,rgba(255,106,42,.26),transparent 34%),radial-gradient(circle at 90% 0%,rgba(139,92,246,.22),transparent 35%);pointer-events:none}
+.page-hero-content,.page-hero-actions{position:relative;z-index:1}
+.page-eyebrow{display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;font-size:11px;font-weight:850;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.page-eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 18px rgba(255,106,42,.75)}
+.page-hero h2{font-size:clamp(26px,4vw,44px);line-height:1.04;letter-spacing:-.06em;margin:0 0 10px;font-weight:900}
+.page-hero p{max-width:780px;color:var(--text-2);font-size:14.5px;line-height:1.6}
+.page-hero-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.hero-pill{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid var(--border);font-size:12px;color:var(--text-2);font-weight:750}
+
+.kpi-grid{gap:18px;margin-bottom:18px}
+.kpi{
+  position:relative;padding:20px;border-radius:24px;border:1px solid var(--border);
+  background:linear-gradient(160deg,rgba(255,255,255,.09),rgba(255,255,255,.035));
+  box-shadow:var(--shadow-soft);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+.kpi:hover{transform:translateY(-4px);box-shadow:var(--shadow);border-color:rgba(255,255,255,.18)}
+.kpi::before{width:100%;height:3px;inset:0 0 auto;background:linear-gradient(90deg,var(--text-4),transparent)}
+.kpi::after{content:"";position:absolute;right:-28px;top:-28px;width:96px;height:96px;border-radius:50%;background:currentColor;opacity:.08;filter:blur(4px)}
+.kpi.accent{color:var(--accent)}.kpi.success{color:var(--success)}.kpi.warn{color:var(--warn)}.kpi.info{color:var(--info)}.kpi.danger{color:var(--danger)}
+.kpi-label{font-size:11px;color:var(--text-3);font-weight:850;letter-spacing:.11em}
+.kpi-value{font-size:clamp(28px,5vw,40px);line-height:1;margin:12px 0 7px;color:var(--text);font-weight:850}
+.kpi-change{font-size:12.5px;color:var(--text-2)}
+
+.card{
+  border-radius:24px;border:1px solid var(--border);background:linear-gradient(160deg,rgba(255,255,255,.08),rgba(255,255,255,.035));
+  box-shadow:var(--shadow-soft);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  transition:transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+.card:hover{border-color:rgba(255,255,255,.16);box-shadow:var(--shadow)}
+.card-title{font-size:14px;font-weight:820;letter-spacing:-.02em}
+.section-head{margin:26px 0 14px}.section-head h2{font-weight:900;color:var(--text-3)}
+
+.dashboard-control-card{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:18px}
+.dashboard-control-card .control-main{flex:1;min-width:0}
+.search-wrap{margin-bottom:10px}.search-input{height:48px;border-radius:16px;background:rgba(255,255,255,.055);border-color:var(--border);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.search-input:focus{box-shadow:var(--ring);background:rgba(255,255,255,.075)}
+.chips{padding:2px 0 0;gap:8px}.chip{height:36px;padding:0 15px;border-radius:999px;background:rgba(255,255,255,.05);border-color:var(--border);font-weight:760;color:var(--text-2)}
+.chip:hover{transform:translateY(-1px);color:var(--text)}.chip.active{background:linear-gradient(135deg,var(--accent),var(--accent-2));border:0;color:#fff;box-shadow:0 12px 26px rgba(255,106,42,.24)}
+
+.user-grid{gap:14px}.user-card{position:relative;overflow:hidden;padding:16px;border-radius:20px;border:1px solid var(--border);border-left:1px solid var(--border);background:linear-gradient(160deg,rgba(255,255,255,.075),rgba(255,255,255,.035));box-shadow:0 10px 30px rgba(0,0,0,.16);transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease,background .2s ease}
+.user-card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--text-4),transparent)}
+.user-card.online::before{background:linear-gradient(90deg,var(--success),transparent)}.user-card.idle::before{background:linear-gradient(90deg,var(--warn),transparent)}.user-card.offline::before{background:linear-gradient(90deg,var(--text-4),transparent)}
+.user-card:hover{transform:translateY(-4px);background:linear-gradient(160deg,rgba(255,255,255,.105),rgba(255,255,255,.045));border-color:rgba(255,255,255,.17);box-shadow:var(--shadow-soft)}
+.user-card .uid{font-size:13.5px;letter-spacing:-.02em}.user-card .preview{margin:11px 0 12px;color:var(--text-2)}.user-card .meta{border-top-color:var(--border);padding-top:10px}
+.badge{height:23px;padding:0 8px;border-radius:999px;font-weight:800;letter-spacing:.04em}.badge-online{box-shadow:0 0 20px rgba(34,197,94,.12)}.badge-vip{background:linear-gradient(135deg,rgba(245,158,11,.18),rgba(255,106,42,.12))}
+
+.form-input,.form-textarea,.form-select{border-radius:15px;background:rgba(255,255,255,.055);border-color:var(--border);padding:12px 14px}.form-label{font-weight:800;color:var(--text-2);letter-spacing:.02em}.checkbox,.filter-opt{border-radius:16px;background:rgba(255,255,255,.045);border-color:var(--border)}
+.table-wrap{border:1px solid var(--border);border-radius:18px;overflow:hidden;margin:0}.table-wrap table{background:rgba(255,255,255,.025)}thead th{background:rgba(255,255,255,.045);font-weight:850}tbody tr:hover{background:rgba(255,255,255,.045)}
+.alert-banner{border-radius:16px}.alert-row{border-radius:16px;margin-bottom:8px;border:1px solid var(--border);background:rgba(255,255,255,.035)}.alert-row.unread{background:linear-gradient(135deg,rgba(255,106,42,.15),rgba(139,92,246,.08))}
+.chart-wrap{height:300px}.charts-grid{gap:18px}
+.gallery-grid{gap:12px}.gallery-item{border-radius:18px;box-shadow:0 12px 30px rgba(0,0,0,.22);transition:transform .2s ease}.gallery-item:hover{transform:translateY(-4px)}
+
+.chat-shell{background:radial-gradient(circle at 50% -10%,rgba(139,92,246,.17),transparent 40rem),var(--bg)}.chat-topbar,.chat-input-bar,.quick-replies{background:rgba(8,10,20,.72);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}body.light .chat-topbar,body.light .chat-input-bar,body.light .quick-replies{background:rgba(255,255,255,.8)}.msg{box-shadow:0 10px 26px rgba(0,0,0,.16)}.msg-user{background:linear-gradient(135deg,var(--accent),#ff8a3d)}.msg-sophia{background:rgba(255,255,255,.07);backdrop-filter:blur(10px)}.chat-input{background:rgba(255,255,255,.065);border-color:var(--border)}.fab{background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 18px 42px rgba(139,92,246,.32)}
+.modal,.sheet{border-color:var(--border);background:rgba(12,14,27,.92);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);box-shadow:var(--shadow)}body.light .modal,body.light .sheet{background:rgba(255,255,255,.94)}
+.toast{backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-radius:16px}.skel{background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(255,255,255,.16),rgba(255,255,255,.06));background-size:220% 100%}
+
+.login-page{background:radial-gradient(circle at 20% 10%,rgba(255,106,42,.2),transparent 28rem),radial-gradient(circle at 85% 12%,rgba(139,92,246,.22),transparent 30rem),var(--bg)}.login-card{max-width:420px;padding:34px;border-radius:30px;background:linear-gradient(160deg,rgba(255,255,255,.1),rgba(255,255,255,.045));border-color:var(--border);box-shadow:var(--shadow);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}.login-brand h1{font-size:30px;font-weight:900;letter-spacing:-.06em}.login-brand p{text-transform:uppercase;letter-spacing:.14em;font-weight:800}
+
+@media(max-width:720px){.page-hero{padding-top:16px}.page-hero-inner{padding:19px;border-radius:23px}.dashboard-control-card{display:block}.dashboard-control-card .btn{width:100%;margin-top:12px}.topbar-status{display:none}.kpi-grid{gap:12px}.kpi{padding:16px}.card{border-radius:20px}.container{padding-left:14px;padding-right:14px}.action-grid{grid-template-columns:repeat(2,1fr)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.nav-item:hover,.kpi:hover,.user-card:hover,.gallery-item:hover,.btn:hover{transform:none!important}}
+
 """
 
 # ========================= JS COMMON =========================
@@ -1347,6 +1541,45 @@ document.addEventListener('keydown', function(e){
     document.querySelectorAll('.modal-overlay.open, .sheet.open, .sheet-overlay.open').forEach(el => el.classList.remove('open'));
   }
 });
+
+// Premium micro-interactions
+try {
+  document.documentElement.classList.add('js-ready');
+
+  // '/' focuses the main search without fighting text inputs.
+  document.addEventListener('keydown', function(e){
+    const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+    if (e.key === '/' && !['input','textarea','select'].includes(tag)) {
+      const s = document.getElementById('searchInput');
+      if (s) { e.preventDefault(); s.focus(); }
+    }
+  });
+
+  // Lightweight tilt/glow for premium cards.
+  const premiumCards = '.kpi,.card,.user-card,.gallery-item,.action-btn';
+  document.addEventListener('pointermove', function(e){
+    const card = e.target.closest(premiumCards);
+    if (!card || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const r = card.getBoundingClientRect();
+    card.style.setProperty('--mx', ((e.clientX - r.left) / Math.max(r.width, 1) * 100).toFixed(1) + '%');
+    card.style.setProperty('--my', ((e.clientY - r.top) / Math.max(r.height, 1) * 100).toFixed(1) + '%');
+  });
+
+  // Soft entrance animation.
+  const reveal = function(){
+    const els = document.querySelectorAll('.kpi,.card,.user-card,.alert-row,.gallery-item');
+    if (!('IntersectionObserver' in window)) { els.forEach(el => el.classList.add('is-visible')); return; }
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) { entry.target.classList.add('is-visible'); io.unobserve(entry.target); }
+      });
+    }, {threshold:.08});
+    els.forEach(el => { if (!el.classList.contains('is-visible')) io.observe(el); });
+  };
+  window.premiumReveal = reveal;
+  requestAnimationFrame(reveal);
+} catch(e) { console.warn('premium ui:', e); }
+
 })();
 """
 
@@ -1424,6 +1657,7 @@ async function load(){
       </div>
     </div>
   `).join('');
+  if (window.premiumReveal) window.premiumReveal();
 }
 
 // Initial load
@@ -1480,7 +1714,7 @@ def render_sidebar(active):
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-head">
     <span class="sidebar-dot"></span>
-    <div class="sidebar-brand">Sophia<span>admin v6</span></div>
+    <div class="sidebar-brand"><strong>Sophia</strong><span>Command v7</span></div>
   </div>
   <nav class="sidebar-nav">
     {nav('/dashboard','dashboard','home','Dashboard')}
@@ -1503,15 +1737,52 @@ def render_sidebar(active):
 def render_topbar(title):
     unread = get_unread_count()
     badge = f'<span class="nav-item-badge" style="position:absolute;top:2px;right:2px;min-width:14px;padding:0 3px">{unread}</span>' if unread else ''
+    safe_title = html.escape(title)
     return f"""
 <header class="topbar">
   <button class="menu-btn" onclick="toggleSidebar()" aria-label="Menu">{icon('menu', 18)}</button>
-  <h1 class="topbar-title">{title}</h1>
+  <div class="topbar-copy">
+    <span class="topbar-kicker">Control Center</span>
+    <h1 class="topbar-title">{safe_title}</h1>
+  </div>
+  <div class="topbar-status"><span class="status-live-dot"></span> Tempo real</div>
   <div class="topbar-actions">
     <a href="/alertas" class="btn btn-icon btn-ghost" style="position:relative" aria-label="Alertas">{icon('bell', 16)}{badge}</a>
     <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" aria-label="Tema" data-theme-icon>{icon('moon', 16)}</button>
   </div>
 </header>
+"""
+
+def render_page_hero(title, active_page="dashboard"):
+    subtitles = {
+        "dashboard": "Visão viva dos usuários, status e travas para operar com velocidade e clareza.",
+        "analytics": "Métricas organizadas para leitura rápida, com foco em conversão, mensagens e crescimento.",
+        "broadcast": "Envios segmentados com segurança, contexto e controle visual antes da ação.",
+        "financeiro": "Acompanhe pendências, aprovações e sinais de receita em uma área mais limpa.",
+        "galeria": "Biblioteca visual com navegação mais leve e sensação premium.",
+        "favoritos": "Usuários estratégicos em destaque para acesso rápido.",
+        "alertas": "Central de eventos importantes, pendências e sinais críticos do sistema.",
+        "logs": "Rastro operacional do painel com leitura mais confortável.",
+        "exportar": "Exportações e relatórios com fluxo mais direto.",
+        "config": "Ajustes principais do sistema com menos ruído visual."
+    }
+    subtitle = html.escape(subtitles.get(active_page, "Painel administrativo premium, limpo e pronto para operação."))
+    safe_title = html.escape(title)
+    return f"""
+<section class="page-hero container" aria-label="Resumo da página">
+  <div class="page-hero-inner">
+    <div class="page-hero-content">
+      <div class="page-eyebrow">Sophia Command</div>
+      <h2>{safe_title}</h2>
+      <p>{subtitle}</p>
+      <div class="page-hero-actions">
+        <span class="hero-pill"><span class="status-live-dot"></span> Interface premium</span>
+        <span class="hero-pill">Glass UI</span>
+        <span class="hero-pill">Atalhos e microinterações</span>
+      </div>
+    </div>
+  </div>
+</section>
 """
 
 def render_page(title, content, active_page="dashboard", extra_head="", extra_js=""):
@@ -1525,11 +1796,12 @@ def render_page(title, content, active_page="dashboard", extra_head="", extra_js
   <link rel="stylesheet" href="/admin/static/admin.css">
   {extra_head}
 </head>
-<body>
+<body data-page="{html.escape(active_page)}">
   <div class="layout">
     {render_sidebar(active_page)}
     <div class="main">
       {render_topbar(title)}
+      {render_page_hero(title, active_page)}
       {content}
     </div>
   </div>
@@ -1573,8 +1845,8 @@ def login():
 <div class="login-page">
   <div class="login-card">
     <div class="login-brand">
-      <h1>Sophia Admin</h1>
-      <p>v6 · sign in to continue</p>
+      <h1>Sophia Command</h1>
+      <p>v7 · premium control center</p>
     </div>
     {err_html}
     <form method="post">
@@ -1662,19 +1934,24 @@ def dashboard():
     <article class="kpi danger"><div class="kpi-label">Travados</div><div class="kpi-value mono" id="kpi-locked"><span class="skel">00</span></div><div class="kpi-change">no limite diário</div></article>
   </div>
 
-  <div class="search-wrap">
-    {icon('search', 16, 'search-icon')}
-    <input id="searchInput" type="text" class="search-input" placeholder="Buscar por ID de usuário…" value="{html.escape(initial_q)}">
-  </div>
+  <section class="card dashboard-control-card">
+    <div class="control-main">
+      <div class="search-wrap">
+        {icon('search', 16, 'search-icon')}
+        <input id="searchInput" type="text" class="search-input" placeholder="Buscar por ID de usuário… aperte / para focar" value="{html.escape(initial_q)}">
+      </div>
+      <div class="chips">
+        {chip('all','Todos')}
+        {chip('online','Online')}
+        {chip('vip','VIPs')}
+        {chip('locked','Travados')}
+        {chip('favorites','Favoritos')}
+      </div>
+    </div>
+    <button type="button" class="btn" id="refreshBtn">{icon('refresh', 14)} Atualizar</button>
+  </section>
 
-  <div class="chips">
-    {chip('all','Todos')}
-    {chip('online','Online')}
-    {chip('vip','VIPs')}
-    {chip('locked','Travados')}
-    {chip('favorites','Favoritos')}
-  </div>
-
+  <div class="section-head"><h2>Usuários monitorados</h2><div class="actions"><span class="hero-pill">Atualiza a cada 30s</span></div></div>
   <div class="user-grid" id="userGrid">
     {skel}
   </div>
@@ -2683,12 +2960,12 @@ def health():
     return jsonify({
         "status": "ok",
         "redis": check_redis(),
-        "version": "6.0",
+        "version": "7.0",
         "timestamp": datetime.now().isoformat()
     })
 
 # ========================= STARTUP =========================
 
 if __name__ == "__main__":
-    logger.info(f"Sophia Admin v6 starting on port {PORT}")
+    logger.info(f"Sophia Command v7 starting on port {PORT}")
     app.run(host="0.0.0.0", port=PORT, debug=False)
